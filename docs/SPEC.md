@@ -261,3 +261,5 @@ Status: **50 tests passing**, offline eval ROC-AUC 1.000, live-verified.
 - Default embedding: ship hashing as default; promote sentence-transformer when `[local-embed]` present?
 - Curating `difficulty_exemplars.jsonl` beyond the seed set (e.g. MT-Bench / Arena-style).
 - Cost accounting source (static `cost_per_1k` vs provider usage echo).
+- `smartrouter serve --workers N` for multi-process scaling beyond the ~580 routes/s
+  single-process ceiling (GIL-bound; WAL log already multi-process safe). — issue #1
