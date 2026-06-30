@@ -170,12 +170,9 @@ class RouterCore:
         if not self.store:
             return
         cost = _estimate_cost(resp, spec)
-        self.store._conn.execute(
-            "UPDATE decisions SET cost=?, latency_ms=?, chosen_model=? "
-            "WHERE decision_id=?",
-            (cost, latency_ms, spec.id, decision.decision_id),
+        self.store.update_outcome(
+            decision.decision_id, cost=cost, latency_ms=latency_ms, chosen_model=spec.id
         )
-        self.store._conn.commit()
 
         # Implicit label: a JSON request whose output isn't valid JSON means the
         # chosen model under-served it -> weak "hard" signal.
@@ -231,12 +228,9 @@ class RouterCore:
                     yield chunk
                 latency_ms = (time.time() - t0) * 1000.0
                 if self.store:
-                    self.store._conn.execute(
-                        "UPDATE decisions SET latency_ms=?, chosen_model=? "
-                        "WHERE decision_id=?",
-                        (latency_ms, spec.id, decision.decision_id),
+                    self.store.update_outcome(
+                        decision.decision_id, latency_ms=latency_ms, chosen_model=spec.id
                     )
-                    self.store._conn.commit()
 
             return _emit(), decision
 

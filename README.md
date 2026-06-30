@@ -79,6 +79,36 @@ failed, the user regenerated) or explicitly via `router.feedback(decision_id, la
 The `train/` scripts turn that corpus into a refreshed classifier head, or distill a
 smaller/faster embedder that approximates your routing decisions.
 
+## Run it as a shared server
+
+For more than one service, run `smartrouter` once and point everything at it — so you get
+one classifier, one central decision log (every service feeds the same training corpus),
+and provider keys in a single process. The endpoint is OpenAI-compatible, so services swap
+in by changing a base URL.
+
+```bash
+pip install "smartrouter[server]"
+export OPENROUTER_API_KEY=...           # provider keys live here, in one place
+export SMARTROUTER_API_KEY=...          # optional bearer token clients must send
+smartrouter serve --config router.yaml --host 127.0.0.1 --port 4000
+```
+
+Endpoints: `POST /v1/chat/completions` (OpenAI-compatible, supports `stream`),
+`POST /route` (decision only), `POST /feedback`, `GET /stats`, `GET /health`.
+
+Any service then points its existing OpenAI/OpenRouter client at the router:
+
+```python
+from openai import OpenAI
+client = OpenAI(base_url="http://127.0.0.1:4000/v1", api_key="<SMARTROUTER_API_KEY>")
+resp = client.chat.completions.create(model="auto", messages=[...])  # router picks the model
+```
+
+Per-request overrides ride along in the JSON body (`local_only`, `force_tier`,
+`cheap_only`). Deploy it as a daemon with the PM2 config in
+[`examples/ecosystem.config.js`](examples/ecosystem.config.js). For one-off scripts you can
+still embed the library directly (`RouterCore` / `RouterClient`) instead of running a server.
+
 ## Where it fits
 
 - **vs [lm-sys/RouteLLM](https://github.com/lm-sys/RouteLLM)** — RouteLLM is a research

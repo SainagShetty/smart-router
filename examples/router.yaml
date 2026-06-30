@@ -15,11 +15,11 @@ tiers:
   - { name: frontier, min_score: 0.75 }
 
 models:
-  - id: "llama3.1:8b"
+  - id: "gemma3n:e4b"
     provider: ollama
     tier: local
     context_window: 8192
-    capabilities: { tools: true }
+    capabilities: { vision: true }
   - id: "openai/gpt-4o-mini"
     provider: openrouter
     tier: cheap
