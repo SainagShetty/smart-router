@@ -19,7 +19,10 @@ models:
     provider: ollama
     tier: local
     context_window: 8192
-    capabilities: { vision: true }
+    # vision:false so image requests gate straight to the cloud vision models.
+    # (Ollama's OpenAI endpoint won't fetch image URLs; it needs base64. Flip to
+    # true only if your callers send base64 image data.)
+    capabilities: {}
   - id: "openai/gpt-4o-mini"
     provider: openrouter
     tier: cheap
