@@ -1,0 +1,48 @@
+# Example smartrouter config: local Ollama -> cheap cloud -> frontier.
+providers:
+  ollama:
+    type: ollama
+    base_url: http://localhost:11434/v1
+    local: true
+  openrouter:
+    type: openrouter
+    base_url: https://openrouter.ai/api/v1
+    api_key_env: OPENROUTER_API_KEY
+
+tiers:
+  - { name: local,    min_score: 0.0 }
+  - { name: cheap,    min_score: 0.40 }
+  - { name: frontier, min_score: 0.75 }
+
+models:
+  - id: "llama3.1:8b"
+    provider: ollama
+    tier: local
+    context_window: 8192
+    capabilities: { tools: true }
+  - id: "openai/gpt-4o-mini"
+    provider: openrouter
+    tier: cheap
+    cost_per_1k: 0.0006
+    context_window: 128000
+    capabilities: { vision: true, tools: true, json: true }
+  - id: "anthropic/claude-3.5-sonnet"
+    provider: openrouter
+    tier: frontier
+    cost_per_1k: 0.009
+    context_window: 200000
+    capabilities: { vision: true, tools: true, json: true }
+
+classifier:
+  kind: embedding
+  embedding_backend: hashing   # no torch; swap to sentence-transformer with the local-embed extra
+
+policy:
+  fallback: down
+  allow_overrides: true
+  default_tier: cheap
+
+logging:
+  enabled: true
+  db_path: smartrouter.db
+  log_raw: false               # set true to retain prompts for distillation

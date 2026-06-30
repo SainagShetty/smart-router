@@ -1,0 +1,60 @@
+{"text": "What's the capital of France?", "label": 0}
+{"text": "Convert 10 miles to kilometers.", "label": 0}
+{"text": "What time zone is New York in?", "label": 0}
+{"text": "Spell the word 'necessary'.", "label": 0}
+{"text": "Translate 'good morning' into Spanish.", "label": 0}
+{"text": "What is 15% of 200?", "label": 0}
+{"text": "Give me a synonym for 'happy'.", "label": 0}
+{"text": "What day of the week was July 4, 1776?", "label": 0}
+{"text": "Summarize this sentence in five words.", "label": 0}
+{"text": "List three primary colors.", "label": 0}
+{"text": "How many ounces are in a pound?", "label": 0}
+{"text": "Capitalize the first letter of each word: hello world.", "label": 0}
+{"text": "What is the boiling point of water in Celsius?", "label": 0}
+{"text": "Rewrite 'I am going to the store' more politely.", "label": 0}
+{"text": "What's 7 times 8?", "label": 0}
+{"text": "Define the word 'ephemeral'.", "label": 0}
+{"text": "Suggest a name for a pet goldfish.", "label": 0}
+{"text": "What is the chemical symbol for gold?", "label": 0}
+{"text": "Turn this into a bullet list: eggs milk bread.", "label": 0}
+{"text": "How do you say 'thank you' in Japanese?", "label": 0}
+{"text": "What's the plural of 'cactus'?", "label": 0}
+{"text": "Round 3.14159 to two decimal places.", "label": 0}
+{"text": "Give me a one-line motivational quote.", "label": 0}
+{"text": "Which planet is closest to the sun?", "label": 0}
+{"text": "Fix the typo: 'recieve'.", "label": 0}
+{"text": "What's the opposite of 'increase'?", "label": 0}
+{"text": "Convert 100 USD to a rough EUR estimate at 0.9 rate.", "label": 0}
+{"text": "Write a friendly one-sentence greeting for an email.", "label": 0}
+{"text": "What is the freezing point of water in Fahrenheit?", "label": 0}
+{"text": "Name a fruit that is yellow.", "label": 0}
+{"text": "Prove that the square root of 2 is irrational.", "label": 1}
+{"text": "Derive the closed-form solution for a linear regression with L2 regularization.", "label": 1}
+{"text": "Debug this multi-threaded Go program that deadlocks intermittently under load and explain the root cause.", "label": 1}
+{"text": "Design a horizontally scalable rate limiter for a distributed API gateway and discuss the consistency trade-offs.", "label": 1}
+{"text": "Explain why the transformer attention mechanism scales quadratically and outline three approaches to reduce it.", "label": 1}
+{"text": "Refactor this 400-line legacy module into clean, testable components while preserving behavior, and justify each step.", "label": 1}
+{"text": "Optimize this dynamic programming solution from O(n^2) to O(n log n) and prove the new complexity.", "label": 1}
+{"text": "Walk through the proof of the CAP theorem and discuss how Spanner sidesteps it in practice.", "label": 1}
+{"text": "Given these conflicting requirements, design a database schema and reason about the normalization trade-offs.", "label": 1}
+{"text": "Analyze the failure modes of this Raft implementation during a network partition and propose fixes.", "label": 1}
+{"text": "Solve this integral by parts and explain each substitution step by step.", "label": 1}
+{"text": "Write a recursive descent parser for this grammar and explain how it handles left recursion.", "label": 1}
+{"text": "Compare gradient descent, Adam, and L-BFGS for this non-convex objective and recommend one with justification.", "label": 1}
+{"text": "Explain the trade-offs between optimistic and pessimistic concurrency control for a high-contention workload.", "label": 1}
+{"text": "Derive the time complexity of this recursive function using the master theorem.", "label": 1}
+{"text": "Design an end-to-end architecture for real-time fraud detection at 1M events/sec and justify each component.", "label": 1}
+{"text": "Reason about whether this cryptographic protocol is vulnerable to a replay attack and prove your conclusion.", "label": 1}
+{"text": "Explain how garbage collection pauses arise in a generational collector and how to tune them for low latency.", "label": 1}
+{"text": "Given this ambiguous spec, enumerate the edge cases, then design an algorithm that handles all of them.", "label": 1}
+{"text": "Prove the correctness of Dijkstra's algorithm using a loop invariant.", "label": 1}
+{"text": "Analyze the bias-variance trade-off for this model and propose a regularization strategy with reasoning.", "label": 1}
+{"text": "Explain step by step how to implement consistent hashing with virtual nodes and bounded load.", "label": 1}
+{"text": "Refactor this concurrent cache to be lock-free and argue why it is linearizable.", "label": 1}
+{"text": "Derive the backpropagation equations for a two-layer network with softmax cross-entropy.", "label": 1}
+{"text": "Design a migration plan to move a monolith to microservices without downtime and discuss the risks.", "label": 1}
+{"text": "Explain why this SQL query is slow, analyze the execution plan, and rewrite it for better performance.", "label": 1}
+{"text": "Reason about the halting behavior of this program and explain whether termination is decidable here.", "label": 1}
+{"text": "Construct a proof by induction that this greedy algorithm produces an optimal solution.", "label": 1}
+{"text": "Architect a fault-tolerant event-sourcing system and reason about exactly-once delivery guarantees.", "label": 1}
+{"text": "Diagnose this intermittent production memory leak from these heap snapshots and explain the retention path.", "label": 1}

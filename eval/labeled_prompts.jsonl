@@ -1,0 +1,22 @@
+{"text": "What's the capital of Japan?", "label": 0}
+{"text": "How many days are in a leap year?", "label": 0}
+{"text": "Translate 'see you tomorrow' to French.", "label": 0}
+{"text": "What is 25 divided by 5?", "label": 0}
+{"text": "Give me a synonym for 'fast'.", "label": 0}
+{"text": "Write a one-sentence birthday message.", "label": 0}
+{"text": "What's the abbreviation for California?", "label": 0}
+{"text": "List the days of the week.", "label": 0}
+{"text": "Round 7.86 to the nearest whole number.", "label": 0}
+{"text": "What color do you get mixing blue and yellow?", "label": 0}
+{"text": "Convert 2 hours into minutes.", "label": 0}
+{"text": "Capitalize this sentence: the cat sat.", "label": 0}
+{"text": "Prove that there are infinitely many prime numbers.", "label": 1}
+{"text": "Design a sharded, eventually-consistent key-value store and discuss the trade-offs versus a single leader.", "label": 1}
+{"text": "Debug this race condition in an async event loop and explain why awaiting in a finally block changes behavior.", "label": 1}
+{"text": "Derive the gradient of the cross-entropy loss with respect to the logits and simplify.", "label": 1}
+{"text": "Analyze the time and space complexity of this recursive memoized solution and prove the bound.", "label": 1}
+{"text": "Architect a multi-region active-active deployment and reason about conflict resolution for writes.", "label": 1}
+{"text": "Explain step by step how a B-tree rebalances on deletion and why the invariants hold.", "label": 1}
+{"text": "Refactor this tightly coupled service layer into hexagonal architecture and justify the boundaries.", "label": 1}
+{"text": "Optimize this nested loop join into a hash join and reason about the memory/latency trade-off.", "label": 1}
+{"text": "Prove the correctness of this concurrent queue using a linearization argument.", "label": 1}
