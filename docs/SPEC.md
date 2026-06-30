@@ -77,7 +77,9 @@ requirement (e.g. an image) always wins over the difficulty score.
 | `providers/*` | `complete()`/`stream()` over OpenRouter, Ollama, OpenAI, Anthropic (httpx). |
 | `core.py` | `RouterCore.route()` (explicit) + `feedback()`. |
 | `client.py` | `RouterClient.chat.completions.create()` drop-in + streaming. |
-| `logging_.py` | SQLite training store, implicit + explicit label capture, tracing hooks. |
+| `logging_.py` | Thread-safe SQLite training store, implicit + explicit label capture, tracing hooks. |
+| `server.py` | FastAPI app (`create_app`): OpenAI-compatible `/v1/chat/completions`, `/route`, `/feedback`, `/stats`, `/health`, optional bearer auth. |
+| `cli.py` | `smartrouter serve` console entry point (uvicorn). |
 | `train/` | `export.py`, `train_head.py`, `distill_embedder.py` (optional). |
 | `eval/run_eval.py` | Offline tier-distribution + cost/quality harness. |
 
@@ -205,29 +207,55 @@ Ollama both speak the OpenAI Chat Completions shape (Ollama via `/v1`), so one O
 adapter covers them; OpenAI direct reuses it; Anthropic gets a thin shape-translation
 adapter. API keys via direct value or `api_key_env`. No secrets logged.
 
-## 10. Dependencies
+## 10. Server & deployment (shared router)
+
+For multiple services, run one `smartrouter serve` (FastAPI) and have every service point
+its OpenAI/OpenRouter client at it — one classifier, **one central decision log** (all
+traffic feeds the same training corpus), provider keys in a single process, routing policy
+changed in one place.
+
+- **Endpoints:** `POST /v1/chat/completions` (OpenAI-compatible, `stream` supported via
+  SSE), `POST /route` (decision only), `POST /feedback`, `GET /stats`, `GET /health`.
+  Per-request overrides (`local_only`/`force_tier`/`cheap_only`) ride in the JSON body.
+- **Auth:** optional bearer token from `SMARTROUTER_API_KEY` (recommended — the process
+  holds provider keys); `/health` stays open.
+- **Concurrency:** sync endpoints run in uvicorn's threadpool over one shared `RouterCore`;
+  `TrainingStore` is thread-safe (`check_same_thread=False` + lock).
+- **Run it:** `smartrouter serve --config router.yaml --host 127.0.0.1 --port 4000`, or
+  `SMARTROUTER_CONFIG=router.yaml uvicorn smartrouter.server:app`. Deploy as a PM2 daemon
+  (`examples/ecosystem.config.js`); expose beyond localhost via Caddy + Cloudflare Tunnel,
+  not by binding `0.0.0.0`.
+- **Embedded mode** (`RouterCore`/`RouterClient` in-process) remains for one-off scripts.
+
+## 11. Dependencies
 
 Core: `pydantic≥2`, `httpx`, `scikit-learn`, `numpy`, `pyyaml`, `joblib`.
-Extras: `[local-embed]` (sentence-transformers), `[routellm]`, `[langfuse]`, `[dev]` (pytest).
+Extras: `[server]` (fastapi + uvicorn), `[local-embed]` (sentence-transformers),
+`[routellm]`, `[langfuse]`, `[dev]` (pytest + fastapi). Console script: `smartrouter`.
 
-## 11. Verification
+## 12. Verification
 
 - **Unit:** capability gate (image→vision, tools, json, context overflow), policy bands +
   overrides, fallback chain, config validation, graceful classifier-failure default.
 - **Offline eval:** `eval/run_eval.py` on `labeled_prompts.jsonl` → tier distribution +
   cost/quality vs a gold model (target: most quality retained at large cost cut).
-- **Live smoke:** local=Ollama, frontier=OpenRouter; easy + hard + image prompt land in the
-  expected tiers and return valid responses.
+- **Server:** FastAPI `TestClient` covers health, auth, `/route`, `/v1/chat/completions`,
+  streaming, `/feedback`, `/stats`, and the `NoEligibleModel` path.
+- **Live smoke (done):** local=Ollama (`gemma3n:e4b`), cloud=OpenRouter; easy→local,
+  hard→cloud, hard+`local_only`→local — verified both embedded and over HTTP.
 - **Training loop:** run requests → `feedback()`/implicit labels → `export` + `train_head`
   → asserts a fresh head is produced and loads. Proves the log is genuinely trainable.
 
-## 12. Milestones
+Status: **50 tests passing**, offline eval ROC-AUC 1.000, live-verified.
 
-1. config ✓ · 2. features + gate ✓ · 3. classifiers + bundled head ·
-4. policy · 5. providers · 6. core + client · 7. logging store + feedback ·
-8. train pipeline · 9. routellm adapter · 10. eval + tests + README/examples + packaging.
+## 13. Milestones (all v1 complete)
 
-## 13. Open items
+1. config · 2. features + gate · 3. classifiers + bundled head · 4. policy ·
+5. providers · 6. core + client · 7. logging store + feedback · 8. train pipeline ·
+9. routellm adapter · 10. eval + tests + README/examples + packaging ·
+11. shared HTTP server + CLI + thread-safe store.
+
+## 14. Open items
 
 - Package/repo name (working title `smartrouter`).
 - Default embedding: ship hashing as default; promote sentence-transformer when `[local-embed]` present?
