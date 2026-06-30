@@ -32,6 +32,11 @@ from .errors import NoEligibleModel, ProviderError
 
 
 class ChatRequest(BaseModel):
+    # extra="allow" so standard OpenAI top-level params (temperature, max_tokens,
+    # top_p, stop, seed, ...) sent by the OpenAI SDK or any OpenAI-shaped client
+    # are captured and forwarded to the provider instead of being dropped.
+    model_config = {"extra": "allow"}
+
     messages: List[Dict[str, Any]]
     model: Optional[str] = None  # accepted & ignored; the router decides
     stream: bool = False
@@ -40,7 +45,7 @@ class ChatRequest(BaseModel):
     force_tier: Optional[str] = None
     cheap_only: bool = False
     local_only: bool = False
-    # passthrough sampling params (temperature, max_tokens, top_p, ...)
+    # explicit passthrough params, for clients that prefer to nest them
     params: Dict[str, Any] = Field(default_factory=dict)
 
 
@@ -88,6 +93,13 @@ def create_app(config: RouterConfig, api_key: Optional[str] = None):
             "local_only": req.local_only,
         }
 
+    def _passthrough(req) -> Dict[str, Any]:
+        # Standard OpenAI top-level params (temperature, max_tokens, ...) land in
+        # model_extra; the explicit `params` dict wins on conflict.
+        merged = {k: v for k, v in (req.model_extra or {}).items() if v is not None}
+        merged.update(req.params or {})
+        return merged
+
     @app.get("/health")
     def health():
         return {
@@ -112,9 +124,10 @@ def create_app(config: RouterConfig, api_key: Optional[str] = None):
     @app.post("/v1/chat/completions", dependencies=[Depends(require_auth)])
     def chat_completions(req: ChatRequest):
         ov = _overrides(req)
+        passthrough = _passthrough(req)
         try:
             if req.stream:
-                chunks, decision = core.stream(req.messages, **ov, **req.params)
+                chunks, decision = core.stream(req.messages, **ov, **passthrough)
 
                 def event_stream():
                     for chunk in chunks:
@@ -124,7 +137,7 @@ def create_app(config: RouterConfig, api_key: Optional[str] = None):
 
                 return StreamingResponse(event_stream(), media_type="text/event-stream")
 
-            resp, decision = core.complete(req.messages, **ov, **req.params)
+            resp, decision = core.complete(req.messages, **ov, **passthrough)
             resp["decision_id"] = decision.decision_id
             resp["routing"] = {"tier": decision.tier, "model": decision.model,
                                "score": decision.score, "reason": decision.reason}
