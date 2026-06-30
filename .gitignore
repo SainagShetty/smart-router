@@ -9,3 +9,5 @@ dist/
 *.db-wal
 *.db-shm
 .DS_Store
+ops/.alert_state/
+ops/healthcheck.log

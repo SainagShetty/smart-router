@@ -41,12 +41,17 @@ def _by_tier(config: RouterConfig, models: List[ModelSpec]) -> Dict[str, List[Mo
 
 
 def _target_tier_index(config: RouterConfig, score: float) -> int:
-    """Most capable tier whose min_score <= score."""
-    idx = 0
-    for i, tier in enumerate(config.tiers):
-        if score >= tier.min_score:
-            idx = i
-    return idx
+    """Most capable tier whose min_score <= score.
+
+    If the score falls below every tier's floor (no band matches), fall back to
+    ``policy.default_tier`` when set, else the cheapest tier.
+    """
+    matched = [i for i, tier in enumerate(config.tiers) if score >= tier.min_score]
+    if matched:
+        return max(matched)
+    if config.policy.default_tier:
+        return config.tier_index(config.policy.default_tier)
+    return 0
 
 
 def decide(
