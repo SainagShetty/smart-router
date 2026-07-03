@@ -23,17 +23,17 @@ models:
     # (Ollama's OpenAI endpoint won't fetch image URLs; it needs base64. Flip to
     # true only if your callers send base64 image data.)
     capabilities: {}
-  - id: "openai/gpt-4o-mini"
+  - id: "xiaomi/mimo-v2.5"
     provider: openrouter
     tier: cheap
-    cost_per_1k: 0.0006
-    context_window: 128000
+    cost_per_1k: 0.0002
+    context_window: 1048576
     capabilities: { vision: true, tools: true, json: true }
-  - id: "anthropic/claude-3.5-sonnet"
+  - id: "google/gemini-3.1-flash-lite"
     provider: openrouter
     tier: frontier
-    cost_per_1k: 0.009
-    context_window: 200000
+    cost_per_1k: 0.0009
+    context_window: 1048576
     capabilities: { vision: true, tools: true, json: true }
 
 classifier:

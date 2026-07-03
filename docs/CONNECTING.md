@@ -103,8 +103,8 @@ directly.
 ## Current tiers / models (from the running config)
 
 - `local` → `gemma3n:e4b` (Ollama, on-device)
-- `cheap` → `openai/gpt-4o-mini` (OpenRouter)
-- `frontier` → `anthropic/claude-3.5-sonnet` (OpenRouter)
+- `cheap` → `xiaomi/mimo-v2.5` (OpenRouter)
+- `frontier` → `google/gemini-3.1-flash-lite` (OpenRouter)
 
 Check `GET /health` for the live list.
 
