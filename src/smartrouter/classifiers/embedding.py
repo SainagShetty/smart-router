@@ -140,7 +140,12 @@ class EmbeddingClassifier(Classifier):
         return self.score_vector(vec), vec
 
     def _proba_hard(self, vecs: np.ndarray) -> np.ndarray:
-        proba = self.head.predict_proba(vecs)
+        # macOS Accelerate emits spurious overflow/invalid/divide RuntimeWarnings
+        # from the sparse-ish matmul inside predict_proba; the resulting
+        # probabilities are valid (verified: no NaN/saturation in production
+        # scores), so silence the FP warnings locally rather than flooding logs.
+        with np.errstate(over="ignore", invalid="ignore", divide="ignore"):
+            proba = self.head.predict_proba(vecs)
         classes = list(self.head.classes_)
         idx = classes.index(self.hard_label) if self.hard_label in classes else -1
         return proba[:, idx]
