@@ -63,6 +63,17 @@ Add these to the request body (raw HTTP) or via `extra_body={...}` (OpenAI SDK).
 | `force_tier: "frontier"` | Pin to one exact tier (`local` \| `cheap` \| `frontier`); skips the classifier. |
 | `cheap_only: true` | Cap at the cheapest cloud tier (never frontier). |
 
+## Tagging the decision log (do this — it feeds training)
+
+The router logs every request as training data. Three more body fields control that log
+(same placement as the overrides above; they are stripped before the provider call):
+
+| Field | Effect |
+|---|---|
+| `source: "myservice"` | Tag the row with which service sent it. **Always send this.** |
+| `sensitive: true` | Mark the row so training exports can include/exclude it with one filter (e.g. finance data). Default `false`. |
+| `log_raw: false` | Per-request override of raw logging. The running config stores raw prompts **and responses** by default (it's all Sai's own traffic — the corpus for retraining the classifier and distilling a personal LLM); send `false` to store only a SHA-256 and no response text. |
+
 ```python
 # OpenAI SDK: keep a cheap intent-classification step on-device
 client.chat.completions.create(model="auto", messages=msgs,
@@ -116,7 +127,8 @@ Check `GET /health` for the live list.
 
 ## Notes
 
-- Don't put secrets in prompts — requests are logged (the prompt is hashed by default, not
-  stored in plaintext, but treat the log as sensitive anyway).
+- Don't put secrets in prompts — **raw prompts and responses are logged by default** on
+  this deployment (deliberate: it builds the training corpus). Tag sensitive traffic with
+  `sensitive: true`, or send `log_raw: false` to keep a request hash-only.
 - The router already has the provider API keys; your service does **not** need an
   OpenRouter key to use it.

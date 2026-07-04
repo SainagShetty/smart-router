@@ -39,6 +39,9 @@ class Decision:
     model_spec: Optional[ModelSpec] = field(default=None, repr=False)
     fallback_specs: List[ModelSpec] = field(default_factory=list, repr=False)
     embedding: Any = field(default=None, repr=False)
+    # Effective raw-logging choice for this request (per-request override falling
+    # back to config). complete()/stream() consult it before storing the response.
+    log_raw: bool = field(default=False, repr=False)
 
 
 class RouterCore:
@@ -63,6 +66,9 @@ class RouterCore:
         force_tier: Optional[str] = None,
         cheap_only: bool = False,
         local_only: bool = False,
+        log_raw: Optional[bool] = None,
+        source: Optional[str] = None,
+        sensitive: bool = False,
     ) -> Decision:
         feats = features_mod.extract(
             messages, tools=tools, response_format=response_format
@@ -93,8 +99,9 @@ class RouterCore:
             model_spec=result.model,
             fallback_specs=result.fallback,
             embedding=embedding,
+            log_raw=self.config.logging.log_raw if log_raw is None else log_raw,
         )
-        self._record(decision, feats)
+        self._record(decision, feats, source=source, sensitive=sensitive)
         return decision
 
     def _score(self, feats) -> Tuple[float, Any]:
@@ -106,7 +113,13 @@ class RouterCore:
             # which the caller can express via policy.default_tier.
             return 0.0, None
 
-    def _record(self, decision: Decision, feats) -> None:
+    def _record(
+        self,
+        decision: Decision,
+        feats,
+        source: Optional[str] = None,
+        sensitive: bool = False,
+    ) -> None:
         if not self.store:
             return
         self.store.record(
@@ -119,7 +132,9 @@ class RouterCore:
             chosen_tier=decision.tier,
             chosen_model=decision.model,
             candidates=decision.candidates,
-            log_raw=self.config.logging.log_raw,
+            log_raw=decision.log_raw,
+            source=source,
+            sensitive=sensitive,
         )
 
     # ---- execution --------------------------------------------------------
@@ -133,11 +148,15 @@ class RouterCore:
         force_tier: Optional[str] = None,
         cheap_only: bool = False,
         local_only: bool = False,
+        log_raw: Optional[bool] = None,
+        source: Optional[str] = None,
+        sensitive: bool = False,
         **params,
     ) -> Tuple[Dict[str, Any], Decision]:
         decision = self.route(
             messages, tools=tools, response_format=response_format,
             force_tier=force_tier, cheap_only=cheap_only, local_only=local_only,
+            log_raw=log_raw, source=source, sensitive=sensitive,
         )
         chain = [decision.model_spec] + list(decision.fallback_specs)
         if tools is not None:
@@ -170,8 +189,12 @@ class RouterCore:
         if not self.store:
             return
         cost = _estimate_cost(resp, spec)
+        # The response is the distillation target — stored under the same privacy
+        # gate as the raw prompt (a stored answer would leak the prompt anyway).
+        response_raw = _response_text(resp) if decision.log_raw else None
         self.store.update_outcome(
-            decision.decision_id, cost=cost, latency_ms=latency_ms, chosen_model=spec.id
+            decision.decision_id, cost=cost, latency_ms=latency_ms,
+            chosen_model=spec.id, response_raw=response_raw,
         )
 
         # Implicit label: a JSON request whose output isn't valid JSON means the
@@ -192,6 +215,9 @@ class RouterCore:
         force_tier: Optional[str] = None,
         cheap_only: bool = False,
         local_only: bool = False,
+        log_raw: Optional[bool] = None,
+        source: Optional[str] = None,
+        sensitive: bool = False,
         **params,
     ) -> Tuple[Iterator[Dict[str, Any]], Decision]:
         """Return (chunk-iterator, Decision). Falls back if a provider errors
@@ -199,6 +225,7 @@ class RouterCore:
         decision = self.route(
             messages, tools=tools, response_format=response_format,
             force_tier=force_tier, cheap_only=cheap_only, local_only=local_only,
+            log_raw=log_raw, source=source, sensitive=sensitive,
         )
         chain = [decision.model_spec] + list(decision.fallback_specs)
         if tools is not None:
@@ -222,14 +249,26 @@ class RouterCore:
                 continue
 
             def _emit():
+                pieces: List[str] = []
+
+                def _collect(chunk):
+                    if decision.log_raw:
+                        piece = _delta_content(chunk)
+                        if piece:
+                            pieces.append(piece)
+
                 if first is not None:
+                    _collect(first)
                     yield first
                 for chunk in gen:
+                    _collect(chunk)
                     yield chunk
                 latency_ms = (time.time() - t0) * 1000.0
                 if self.store:
                     self.store.update_outcome(
-                        decision.decision_id, latency_ms=latency_ms, chosen_model=spec.id
+                        decision.decision_id, latency_ms=latency_ms,
+                        chosen_model=spec.id,
+                        response_raw="".join(pieces) if pieces else None,
                     )
 
             return _emit(), decision
@@ -276,6 +315,25 @@ def _estimate_cost(resp: Dict[str, Any], spec: ModelSpec) -> Optional[float]:
 def _first_content(resp: Dict[str, Any]) -> Optional[str]:
     try:
         return resp["choices"][0]["message"]["content"]
+    except (KeyError, IndexError, TypeError):
+        return None
+
+
+def _response_text(resp: Dict[str, Any]) -> Optional[str]:
+    """The response as trainable text: plain content when the message is text,
+    otherwise the whole message as JSON (preserves tool_calls etc.)."""
+    content = _first_content(resp)
+    if isinstance(content, str) and content:
+        return content
+    try:
+        return json.dumps(resp["choices"][0]["message"])
+    except (KeyError, IndexError, TypeError):
+        return None
+
+
+def _delta_content(chunk: Dict[str, Any]) -> Optional[str]:
+    try:
+        return chunk["choices"][0]["delta"].get("content")
     except (KeyError, IndexError, TypeError):
         return None
 

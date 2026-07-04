@@ -5,8 +5,11 @@ extracted features, the score, the chosen model, observed cost/latency, and a
 nullable label. Labels are what make the corpus trainable later — they arrive
 implicitly (an escalation/validation failure) or explicitly via ``feedback()``.
 
-Privacy: the raw prompt is stored only when ``log_raw=True``; otherwise just a
-SHA-256. Never log secrets.
+Privacy: the raw prompt and response are stored only when ``log_raw=True``
+(config default, overridable per request); otherwise just a SHA-256 of the
+prompt. Rows can carry a ``source`` (which service sent it) and a ``sensitive``
+flag so exports can include/exclude sensitive traffic with one filter. Never
+log secrets.
 """
 from __future__ import annotations
 
@@ -35,11 +38,22 @@ CREATE TABLE IF NOT EXISTS decisions (
     cost               REAL,
     latency_ms         REAL,
     label              INTEGER,
-    label_source       TEXT
+    label_source       TEXT,
+    response_raw       TEXT,
+    source             TEXT,
+    sensitive          INTEGER NOT NULL DEFAULT 0
 );
 CREATE INDEX IF NOT EXISTS idx_decisions_label ON decisions(label);
 CREATE INDEX IF NOT EXISTS idx_decisions_embmodel ON decisions(embedding_model_id);
 """
+
+# Columns added after v1 shipped; applied via ALTER TABLE so existing DBs migrate
+# in place (CREATE TABLE IF NOT EXISTS won't touch them).
+_MIGRATIONS = [
+    ("response_raw", "TEXT"),
+    ("source", "TEXT"),
+    ("sensitive", "INTEGER NOT NULL DEFAULT 0"),
+]
 
 
 def _sha256(text: str) -> str:
@@ -59,6 +73,14 @@ class TrainingStore:
             self._conn.execute("PRAGMA busy_timeout=5000;")
             self._conn.execute("PRAGMA foreign_keys=ON;")
             self._conn.executescript(_SCHEMA)
+            existing = {
+                row[1] for row in self._conn.execute("PRAGMA table_info(decisions);")
+            }
+            for col, decl in _MIGRATIONS:
+                if col not in existing:
+                    self._conn.execute(
+                        f"ALTER TABLE decisions ADD COLUMN {col} {decl}"
+                    )
             self._conn.commit()
 
     # ---- writes -----------------------------------------------------------
@@ -80,6 +102,8 @@ class TrainingStore:
         label: Optional[int] = None,
         label_source: Optional[str] = None,
         log_raw: bool = False,
+        source: Optional[str] = None,
+        sensitive: bool = False,
     ) -> str:
         blob = None
         if embedding is not None:
@@ -89,13 +113,15 @@ class TrainingStore:
                 """INSERT OR REPLACE INTO decisions
                    (decision_id, ts, prompt_sha256, prompt_raw, embedding,
                     embedding_model_id, features, score, chosen_tier, chosen_model,
-                    candidates, cost, latency_ms, label, label_source)
-                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                    candidates, cost, latency_ms, label, label_source,
+                    source, sensitive)
+                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
                 (
                     decision_id, time.time(), _sha256(prompt),
                     prompt if log_raw else None, blob, embedding_model_id,
                     json.dumps(features), score, chosen_tier, chosen_model,
                     json.dumps(candidates), cost, latency_ms, label, label_source,
+                    source, int(sensitive),
                 ),
             )
             self._conn.commit()
@@ -108,13 +134,18 @@ class TrainingStore:
         cost: Optional[float] = None,
         latency_ms: Optional[float] = None,
         chosen_model: Optional[str] = None,
+        response_raw: Optional[str] = None,
     ) -> None:
-        """Record observed cost/latency and the model actually used (post-fallback)."""
+        """Record observed cost/latency and the model actually used (post-fallback).
+
+        ``response_raw`` (the model's answer — the distillation target) is only
+        written when provided, so callers honoring log_raw=False never touch it.
+        """
         with self._lock:
             self._conn.execute(
-                "UPDATE decisions SET cost=?, latency_ms=?, chosen_model=? "
-                "WHERE decision_id=?",
-                (cost, latency_ms, chosen_model, decision_id),
+                "UPDATE decisions SET cost=?, latency_ms=?, chosen_model=?, "
+                "response_raw=COALESCE(?, response_raw) WHERE decision_id=?",
+                (cost, latency_ms, chosen_model, response_raw, decision_id),
             )
             self._conn.commit()
 
@@ -183,6 +214,22 @@ class TrainingStore:
                 "WHERE label IS NOT NULL AND prompt_raw IS NOT NULL"
             ).fetchall()
         return [(p, int(l)) for p, l in rows]
+
+    def sft_rows(self, include_sensitive: bool = True) -> List[Dict[str, Any]]:
+        """(prompt, response) pairs where both raw texts were retained — the
+        corpus for fine-tuning/distilling an LLM. Filter sensitive traffic out
+        with ``include_sensitive=False``."""
+        q = (
+            "SELECT prompt_raw, response_raw, label, chosen_tier, chosen_model, "
+            "source, sensitive FROM decisions "
+            "WHERE prompt_raw IS NOT NULL AND response_raw IS NOT NULL"
+        )
+        if not include_sensitive:
+            q += " AND sensitive = 0"
+        with self._lock:
+            rows = self._conn.execute(q).fetchall()
+        keys = ("prompt", "response", "label", "tier", "model", "source", "sensitive")
+        return [dict(zip(keys, r)) for r in rows]
 
     def close(self) -> None:
         with self._lock:

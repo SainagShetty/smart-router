@@ -45,6 +45,12 @@ class ChatRequest(BaseModel):
     force_tier: Optional[str] = None
     cheap_only: bool = False
     local_only: bool = False
+    # logging controls (declared so they never leak into model_extra -> provider):
+    # log_raw overrides the config default per request; source tags which service
+    # sent it; sensitive marks rows for one-filter exclusion from training exports.
+    log_raw: Optional[bool] = None
+    source: Optional[str] = None
+    sensitive: bool = False
     # explicit passthrough params, for clients that prefer to nest them
     params: Dict[str, Any] = Field(default_factory=dict)
 
@@ -56,6 +62,9 @@ class RouteRequest(BaseModel):
     force_tier: Optional[str] = None
     cheap_only: bool = False
     local_only: bool = False
+    log_raw: Optional[bool] = None
+    source: Optional[str] = None
+    sensitive: bool = False
 
 
 class FeedbackRequest(BaseModel):
@@ -91,6 +100,9 @@ def create_app(config: RouterConfig, api_key: Optional[str] = None):
             "force_tier": req.force_tier,
             "cheap_only": req.cheap_only,
             "local_only": req.local_only,
+            "log_raw": req.log_raw,
+            "source": req.source,
+            "sensitive": req.sensitive,
         }
 
     def _passthrough(req) -> Dict[str, Any]:

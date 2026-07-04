@@ -48,4 +48,8 @@ policy:
 logging:
   enabled: true
   db_path: smartrouter.db
-  log_raw: false               # set true to retain prompts for distillation
+  # Retain raw prompts + responses: this corpus trains the classifier head and
+  # eventually distills a personal LLM. All traffic here is Sai's own; sensitive
+  # services tag rows with `sensitive: true` per request so exports can filter.
+  # (The library default stays false — this is a personal-deployment choice.)
+  log_raw: true
