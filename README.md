@@ -54,19 +54,61 @@ client.chat.completions.create(messages=[...], local_only=True)
 silently falling back to the cloud. "Local" means any provider marked `local: true`
 (default for Ollama).
 
+### Keeping sensitive data on-device
+
+Mark a request `sensitive=True` and it is pinned to local providers no matter what — this
+gate is **un-bypassable**: it ignores `policy.allow_overrides` and beats `force_tier`, and
+raises `NoEligibleModel` rather than ever letting classified data egress to the cloud.
+
+```python
+core.route(messages, sensitive=True)   # never leaves your machine, or it raises
+```
+
+### Cascade: measure quality instead of guessing it
+
+By default the classifier *predicts* difficulty up front. In `cascade` mode the router
+instead runs the cheapest capable model (usually your free local one) **first**, applies a
+cheap deterministic check (non-empty, not a refusal, valid JSON when JSON was asked for),
+and escalates up the tier ladder only when the answer is inadequate. Since a local attempt
+is free, a wasted try costs only latency — and each escalation writes an implicit "hard"
+label back to the training store.
+
+```python
+core.complete(messages, cascade=True)          # or set policy.cascade: true in config
+```
+
+A `sensitive` request in cascade mode escalates only among *local* models — it never egresses.
+
+## Command line
+
+```bash
+smartrouter init                       # autodetect Ollama, write a local-first router.yaml
+smartrouter ask "what is 2+2?"         # route, call the model, print the answer + a receipt
+smartrouter route "prove the theorem"  # dry-run: show the decision (no model call)
+smartrouter stats                      # decision-log totals + how much stayed free-and-local
+smartrouter serve --config router.yaml # the shared HTTP server
+```
+
+Config is resolved from `--config`, then `$SMARTROUTER_CONFIG`,
+`~/.config/smartrouter/router.yaml`, and `./router.yaml`.
+
 ## How it decides "too complex for the local model"
 
 There's no perfect a-priori signal, so `smartrouter` makes the decision **up front with a
-classifier** (fast + precise) and keeps cheap heuristics only as hard capability gates:
+classifier**, and keeps cheap heuristics only as hard capability gates:
 
 - **Default classifier** — embed the prompt and run a small logistic-regression head that
   outputs a difficulty score in `[0, 1]`. Sub-100ms, no extra LLM call, bundled pre-fit so
   it works on day 0. The default embedding backend is a lightweight scikit-learn
   `HashingVectorizer` (no torch); install `smartrouter[local-embed]` to use a
-  sentence-transformer instead.
+  sentence-transformer instead. **Heads up:** the bundled head ships fit on a small seed set
+  and leans on a keyword feature — treat it as a day-0 first-order split, then retrain it on
+  your own logs, use the sentence-transformer backend, or run in `cascade` mode for real
+  quality.
 - **Pluggable** — swap in `RouteLLMClassifier` (wraps
   [lm-sys/RouteLLM](https://github.com/lm-sys/RouteLLM) checkpoints), retrain the embedding
   head on your own logs, or fall back to a zero-dependency heuristic classifier.
+
 
 The thresholds map score bands to tiers; you tune them in config.
 
