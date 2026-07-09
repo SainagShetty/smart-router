@@ -41,6 +41,11 @@ class ModelSpec(BaseModel):
     provider: str  # key into RouterConfig.providers
     tier: str  # key into RouterConfig.tiers
     cost_per_1k: float = 0.0  # USD per 1k tokens (blended); used for tie-breaks/budget
+    # Optional per-direction rates. When both are set, cost is estimated from the
+    # prompt/completion split the provider echoes (output is typically ~4-5x
+    # input); otherwise it falls back to the blended cost_per_1k over total tokens.
+    cost_per_1k_in: Optional[float] = None
+    cost_per_1k_out: Optional[float] = None
     context_window: int = 8192
     capabilities: Capabilities = Field(default_factory=Capabilities)
     # Provider call defaults (temperature, etc.) merged into each request.

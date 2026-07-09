@@ -308,6 +308,14 @@ def _features_dict(feats) -> Dict[str, Any]:
 
 def _estimate_cost(resp: Dict[str, Any], spec: ModelSpec) -> Optional[float]:
     usage = resp.get("usage") or {}
+    # Prefer the prompt/completion split when the model has per-direction rates
+    # and the provider echoed the split (output tokens cost ~4-5x input).
+    prompt = usage.get("prompt_tokens")
+    completion = usage.get("completion_tokens")
+    if (spec.cost_per_1k_in is not None and spec.cost_per_1k_out is not None
+            and prompt is not None and completion is not None):
+        return ((prompt / 1000.0) * spec.cost_per_1k_in
+                + (completion / 1000.0) * spec.cost_per_1k_out)
     total = usage.get("total_tokens")
     if total is None or not spec.cost_per_1k:
         return None
