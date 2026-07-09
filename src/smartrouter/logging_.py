@@ -193,6 +193,42 @@ class TrainingStore:
             ).fetchall()
         return {tier: n for tier, n in rows}
 
+    def savings_summary(self, local_models=None) -> Dict[str, Any]:
+        """Honest, computed-from-persisted-data view of what routing did: how
+        much traffic stayed on-device (the free-local floor) and the observed
+        spend. Reads ~0 on-device for all-cloud traffic — no invented baseline.
+        ``local_models`` names the models that run locally (free)."""
+        local_models = set(local_models or [])
+        with self._lock:
+            total = int(self._conn.execute(
+                "SELECT COUNT(*) FROM decisions").fetchone()[0])
+            total_cost = self._conn.execute(
+                "SELECT COALESCE(SUM(cost), 0) FROM decisions").fetchone()[0]
+            by_tier = {
+                tier: n for tier, n in self._conn.execute(
+                    "SELECT chosen_tier, COUNT(*) FROM decisions "
+                    "GROUP BY chosen_tier").fetchall()
+            }
+            on_device = free = 0
+            if local_models:
+                marks = ",".join("?" * len(local_models))
+                on_device = int(self._conn.execute(
+                    f"SELECT COUNT(*) FROM decisions WHERE chosen_model IN ({marks})",
+                    tuple(local_models)).fetchone()[0])
+                free = int(self._conn.execute(
+                    f"SELECT COUNT(*) FROM decisions WHERE chosen_model IN ({marks}) "
+                    "AND COALESCE(cost, 0) = 0",
+                    tuple(local_models)).fetchone()[0])
+        pct = round(100.0 * on_device / total, 1) if total else 0.0
+        return {
+            "total": total,
+            "on_device": on_device,
+            "on_device_pct": pct,
+            "free": free,
+            "total_cost": round(float(total_cost), 6),
+            "by_tier": by_tier,
+        }
+
     def training_matrix(self, embedding_model_id: str) -> Tuple[np.ndarray, List[int]]:
         """Stored embeddings + labels for rows in a given embedding space.
 

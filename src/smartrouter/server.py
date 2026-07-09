@@ -173,10 +173,13 @@ def create_app(config: RouterConfig, api_key: Optional[str] = None):
     def stats():
         if not core.store:
             return {"logging": "disabled"}
+        local_providers = {n for n, p in config.providers.items() if p.is_local()}
+        local_models = {m.id for m in config.models if m.provider in local_providers}
         return {
             "total": core.store.count(),
             "labeled": core.store.count(labeled_only=True),
             "by_tier": core.store.tier_counts(),
+            "savings": core.store.savings_summary(local_models=local_models),
         }
 
     return app
