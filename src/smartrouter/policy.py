@@ -24,6 +24,10 @@ class Overrides:
     # other overrides this is NOT gated by policy.allow_overrides and beats
     # force_tier — sensitive data must never egress to a non-local provider.
     sensitive: bool = False
+    # Cascade: ignore the difficulty score and start at the cheapest capable
+    # tier, with an ascending fallback so complete() can escalate on a bad
+    # answer instead of predicting difficulty up front.
+    cascade: bool = False
 
 
 @dataclass
@@ -123,7 +127,12 @@ def decide(
         raise NoEligibleModel("no eligible model after overrides", rejected)
 
     # ---- pick the target tier ---------------------------------------------
-    if overrides.force_tier and allow:
+    if overrides.cascade:
+        # Start at the cheapest available tier and let complete() escalate up
+        # on a bad answer, rather than trusting the difficulty score.
+        target = min(available)
+        notes.append("cascade")
+    elif overrides.force_tier and allow:
         target = order.index(overrides.force_tier)
         notes.append(f"score={score:.3f} (ignored: forced)")
     else:
@@ -145,7 +154,8 @@ def decide(
 
     # ---- fallback chain ----------------------------------------------------
     fallback: List[ModelSpec] = []
-    direction = config.policy.fallback
+    # Cascade always escalates upward regardless of the configured direction.
+    direction = "up" if overrides.cascade else config.policy.fallback
     if direction == "down":
         seq = range(target - 1, -1, -1)
     elif direction == "up":

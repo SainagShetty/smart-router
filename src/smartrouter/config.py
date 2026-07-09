@@ -106,6 +106,10 @@ class PolicyConfig(BaseModel):
     fallback: FallbackDirection = "down"
     # Allow per-request force_tier / cheap_only overrides.
     allow_overrides: bool = True
+    # Default to cascade execution (cheapest-first, escalate on a bad answer)
+    # instead of trusting the difficulty score up front. Per-request cascade=
+    # overrides this.
+    cascade: bool = False
     # Tier used when the classifier errors out or no candidate matches a band.
     default_tier: Optional[str] = None
     # Optional hard cap on cost_per_1k of the chosen model.
