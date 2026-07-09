@@ -135,6 +135,8 @@ class RouterCore:
             log_raw=decision.log_raw,
             source=source,
             sensitive=sensitive,
+            reason=decision.reason,
+            rejected=decision.rejected,
         )
 
     # ---- execution --------------------------------------------------------

@@ -41,7 +41,9 @@ CREATE TABLE IF NOT EXISTS decisions (
     label_source       TEXT,
     response_raw       TEXT,
     source             TEXT,
-    sensitive          INTEGER NOT NULL DEFAULT 0
+    sensitive          INTEGER NOT NULL DEFAULT 0,
+    reason             TEXT,
+    rejected           TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_decisions_label ON decisions(label);
 CREATE INDEX IF NOT EXISTS idx_decisions_embmodel ON decisions(embedding_model_id);
@@ -53,6 +55,8 @@ _MIGRATIONS = [
     ("response_raw", "TEXT"),
     ("source", "TEXT"),
     ("sensitive", "INTEGER NOT NULL DEFAULT 0"),
+    ("reason", "TEXT"),
+    ("rejected", "TEXT"),
 ]
 
 
@@ -104,6 +108,8 @@ class TrainingStore:
         log_raw: bool = False,
         source: Optional[str] = None,
         sensitive: bool = False,
+        reason: Optional[str] = None,
+        rejected: Optional[List[str]] = None,
     ) -> str:
         blob = None
         if embedding is not None:
@@ -114,14 +120,15 @@ class TrainingStore:
                    (decision_id, ts, prompt_sha256, prompt_raw, embedding,
                     embedding_model_id, features, score, chosen_tier, chosen_model,
                     candidates, cost, latency_ms, label, label_source,
-                    source, sensitive)
-                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                    source, sensitive, reason, rejected)
+                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
                 (
                     decision_id, time.time(), _sha256(prompt),
                     prompt if log_raw else None, blob, embedding_model_id,
                     json.dumps(features), score, chosen_tier, chosen_model,
                     json.dumps(candidates), cost, latency_ms, label, label_source,
-                    source, int(sensitive),
+                    source, int(sensitive), reason,
+                    json.dumps(rejected) if rejected is not None else None,
                 ),
             )
             self._conn.commit()
