@@ -20,6 +20,10 @@ class Overrides:
     force_tier: Optional[str] = None
     cheap_only: bool = False
     local_only: bool = False
+    # Data-classification pin: keep sensitive prompts on-device. Unlike the
+    # other overrides this is NOT gated by policy.allow_overrides and beats
+    # force_tier — sensitive data must never egress to a non-local provider.
+    sensitive: bool = False
 
 
 @dataclass
@@ -72,12 +76,24 @@ def decide(
     pool = list(candidates)
     notes: List[str] = []
 
+    local_providers = {name for name, p in config.providers.items() if p.is_local()}
+
+    # ---- sensitive pin (un-bypassable; runs before allow_overrides) --------
+    # A prompt marked sensitive is restricted to local providers no matter what
+    # — it ignores allow_overrides and beats force_tier, so classified data can
+    # never egress to the cloud. If nothing local survives the gate, raise.
+    if overrides.sensitive:
+        pool = [m for m in pool if m.provider in local_providers]
+        notes.append("pinned local (sensitive)")
+        if not pool:
+            raise NoEligibleModel(
+                "sensitive: no local model can serve this request without egress",
+                rejected,
+            )
+
     # ---- apply overrides (respecting policy.allow_overrides) --------------
     allow = config.policy.allow_overrides
     if overrides.local_only and allow:
-        local_providers = {
-            name for name, p in config.providers.items() if p.is_local()
-        }
         pool = [m for m in pool if m.provider in local_providers]
         notes.append("local_only")
         if not pool:

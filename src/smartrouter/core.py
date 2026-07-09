@@ -82,7 +82,7 @@ class RouterCore:
             gate.candidates,
             score,
             Overrides(force_tier=force_tier, cheap_only=cheap_only,
-                      local_only=local_only),
+                      local_only=local_only, sensitive=sensitive),
             rejected=gate.rejected,
         )
 
