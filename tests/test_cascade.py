@@ -63,6 +63,19 @@ def test_cascade_escalates_on_empty_answer(tmp_db):
     core.close()
 
 
+def test_cascade_escalation_updates_persisted_tier(tmp_db):
+    # After escalating off the local floor the persisted row must reflect the
+    # tier that actually answered — otherwise savings_summary()['by_tier']
+    # misattributes cloud calls to 'local'.
+    core = RouterCore(make_config(db_path=tmp_db))
+    stub_by_provider(core, {"ollama": "  ", "openrouter": "a real cloud answer"})
+    core.complete([{"role": "user", "content": "2+2?"}], cascade=True)
+    summary = core.store.savings_summary(local_models={"llama3.1:8b"})
+    core.close()
+    assert summary["on_device"] == 0
+    assert summary["by_tier"] == {"cheap": 1}  # not {"local": 1}
+
+
 def test_cascade_escalates_on_invalid_json(config):
     core = RouterCore(config)
     stub_by_provider(core, {"ollama": "not json at all", "openrouter": '{"x": 1}'})

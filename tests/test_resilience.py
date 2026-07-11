@@ -347,8 +347,9 @@ def test_update_outcome_latency_and_model_after_fallback(tmp_db):
     stub_providers(core, fail_providers=("openrouter",))
     _, d = core.complete(HARD)
     row = read_row(core.store, d.decision_id)
-    # Decision routed frontier, but local actually answered post-fallback.
-    assert row["chosen_tier"] == "frontier"
+    # Routed frontier, but local answered post-fallback: the persisted row
+    # tracks the model AND tier that actually served, so stats stay consistent.
+    assert row["chosen_tier"] == "local"
     assert row["chosen_model"] == "llama3.1:8b"
     assert row["latency_ms"] is not None
     core.close()

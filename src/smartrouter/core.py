@@ -216,7 +216,8 @@ class RouterCore:
         response_raw = _response_text(resp) if decision.log_raw else None
         self.store.update_outcome(
             decision.decision_id, cost=cost, latency_ms=latency_ms,
-            chosen_model=spec.id, response_raw=response_raw,
+            chosen_model=spec.id, chosen_tier=spec.tier,
+            response_raw=response_raw,
         )
 
         # Implicit label: a JSON request whose output isn't valid JSON means the
@@ -387,7 +388,7 @@ def _answer_ok(resp: Dict[str, Any], response_format) -> bool:
     content = _first_content(resp)
     if content is None or not isinstance(content, str):
         # A non-text message (e.g. tool_calls) is a legitimate answer.
-        return _first_content(resp) is not None or _has_tool_calls(resp)
+        return content is not None or _has_tool_calls(resp)
     text = content.strip()
     if len(text) < 2:
         return False

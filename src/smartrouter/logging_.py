@@ -141,9 +141,15 @@ class TrainingStore:
         cost: Optional[float] = None,
         latency_ms: Optional[float] = None,
         chosen_model: Optional[str] = None,
+        chosen_tier: Optional[str] = None,
         response_raw: Optional[str] = None,
     ) -> None:
         """Record observed cost/latency and the model actually used (post-fallback).
+
+        ``chosen_tier`` is updated alongside ``chosen_model`` so cascade
+        escalation / error-fallback can't leave the tier pointing at the
+        originally-picked tier while the model reflects the one that answered
+        (which would misattribute cloud calls to the local tier in stats).
 
         ``response_raw`` (the model's answer — the distillation target) is only
         written when provided, so callers honoring log_raw=False never touch it.
@@ -151,8 +157,10 @@ class TrainingStore:
         with self._lock:
             self._conn.execute(
                 "UPDATE decisions SET cost=?, latency_ms=?, chosen_model=?, "
+                "chosen_tier=COALESCE(?, chosen_tier), "
                 "response_raw=COALESCE(?, response_raw) WHERE decision_id=?",
-                (cost, latency_ms, chosen_model, response_raw, decision_id),
+                (cost, latency_ms, chosen_model, chosen_tier, response_raw,
+                 decision_id),
             )
             self._conn.commit()
 
