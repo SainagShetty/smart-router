@@ -15,7 +15,8 @@ from typing import Any, Dict, Iterator, List, Optional, Sequence
 from .config import RouterConfig
 from .core import Decision, Message, RouterCore
 
-_OVERRIDE_KEYS = ("force_tier", "cheap_only", "local_only", "tools", "response_format")
+_OVERRIDE_KEYS = ("force_tier", "cheap_only", "local_only", "cascade",
+                  "tools", "response_format")
 
 
 class _AttrDict(dict):

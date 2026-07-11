@@ -164,6 +164,12 @@ tiers that still have a gated candidate; otherwise fall to `policy.default_tier`
 ## 7. Classifier detail
 
 - **Default = embedding + logistic-regression head.** Output `P(hard) ∈ [0,1]`.
+- **Bundled head is a lexical prior, not a trained semantic model.** It ships fit on a small
+  `difficulty_exemplars.jsonl` seed set and leans on a hard-keyword engineered feature, so out
+  of the box it approximates the `heuristic` classifier — a reasonable day-0 first-order
+  easy-vs-hard split, *not* a generalizing difficulty model. Retrain it on your own logged
+  traffic (`train/train_head.py`), switch to the `sentence-transformer` backend, or run in
+  `cascade` mode (observe the actual answer instead of predicting difficulty) for real quality.
 - **Embedding backends:**
   - `hashing` — scikit-learn `HashingVectorizer` (1024-d, L2). No torch. Ships the bundled
     `data/default_classifier.joblib`, trained on `data/difficulty_exemplars.jsonl`.
@@ -246,7 +252,9 @@ Extras: `[server]` (fastapi + uvicorn), `[local-embed]` (sentence-transformers),
 - **Training loop:** run requests → `feedback()`/implicit labels → `export` + `train_head`
   → asserts a fresh head is produced and loads. Proves the log is genuinely trainable.
 
-Status: **50 tests passing**, offline eval ROC-AUC 1.000, live-verified.
+Status: **182 tests passing**, live-verified. (The bundled classifier's offline eval on the
+tiny seed exemplars is trivially separable — a keyword prior, not a generalization claim; see
+§7. Trust cascade mode or a head retrained on real traffic, not the seed-set score.)
 
 ## 13. Milestones (all v1 complete)
 

@@ -42,6 +42,9 @@ class Decision:
     # Effective raw-logging choice for this request (per-request override falling
     # back to config). complete()/stream() consult it before storing the response.
     log_raw: bool = field(default=False, repr=False)
+    # Whether this decision runs in cascade mode (cheapest-first, escalate on a
+    # bad answer). complete() validates each answer and steps up the chain.
+    cascade: bool = field(default=False, repr=False)
 
 
 class RouterCore:
@@ -66,6 +69,7 @@ class RouterCore:
         force_tier: Optional[str] = None,
         cheap_only: bool = False,
         local_only: bool = False,
+        cascade: Optional[bool] = None,
         log_raw: Optional[bool] = None,
         source: Optional[str] = None,
         sensitive: bool = False,
@@ -77,12 +81,14 @@ class RouterCore:
 
         score, embedding = self._score(feats)
 
+        cascade = self.config.policy.cascade if cascade is None else cascade
         result = decide(
             self.config,
             gate.candidates,
             score,
             Overrides(force_tier=force_tier, cheap_only=cheap_only,
-                      local_only=local_only),
+                      local_only=local_only, sensitive=sensitive,
+                      cascade=cascade),
             rejected=gate.rejected,
         )
 
@@ -100,6 +106,7 @@ class RouterCore:
             fallback_specs=result.fallback,
             embedding=embedding,
             log_raw=self.config.logging.log_raw if log_raw is None else log_raw,
+            cascade=cascade,
         )
         self._record(decision, feats, source=source, sensitive=sensitive)
         return decision
@@ -135,6 +142,8 @@ class RouterCore:
             log_raw=decision.log_raw,
             source=source,
             sensitive=sensitive,
+            reason=decision.reason,
+            rejected=decision.rejected,
         )
 
     # ---- execution --------------------------------------------------------
@@ -148,6 +157,7 @@ class RouterCore:
         force_tier: Optional[str] = None,
         cheap_only: bool = False,
         local_only: bool = False,
+        cascade: Optional[bool] = None,
         log_raw: Optional[bool] = None,
         source: Optional[str] = None,
         sensitive: bool = False,
@@ -156,7 +166,7 @@ class RouterCore:
         decision = self.route(
             messages, tools=tools, response_format=response_format,
             force_tier=force_tier, cheap_only=cheap_only, local_only=local_only,
-            log_raw=log_raw, source=source, sensitive=sensitive,
+            cascade=cascade, log_raw=log_raw, source=source, sensitive=sensitive,
         )
         chain = [decision.model_spec] + list(decision.fallback_specs)
         if tools is not None:
@@ -177,6 +187,18 @@ class RouterCore:
                 continue
             latency_ms = (time.time() - t0) * 1000.0
 
+            # Cascade: if a cheaper answer is inadequate and a higher tier is
+            # still available, escalate rather than return it. The last spec in
+            # the chain is always returned (best effort). For sensitive requests
+            # the chain contains only local models, so escalation never egresses.
+            if (decision.cascade and i < len(chain) - 1
+                    and not _answer_ok(resp, response_format)):
+                if self.store:
+                    self.store.set_label_if_unset(
+                        decision.decision_id, 1, "implicit:cascade_escalate"
+                    )
+                continue
+
             self._finalize(decision, spec, resp, latency_ms,
                            fell_back=(i > 0), response_format=response_format)
             return resp, decision
@@ -194,7 +216,8 @@ class RouterCore:
         response_raw = _response_text(resp) if decision.log_raw else None
         self.store.update_outcome(
             decision.decision_id, cost=cost, latency_ms=latency_ms,
-            chosen_model=spec.id, response_raw=response_raw,
+            chosen_model=spec.id, chosen_tier=spec.tier,
+            response_raw=response_raw,
         )
 
         # Implicit label: a JSON request whose output isn't valid JSON means the
@@ -306,6 +329,14 @@ def _features_dict(feats) -> Dict[str, Any]:
 
 def _estimate_cost(resp: Dict[str, Any], spec: ModelSpec) -> Optional[float]:
     usage = resp.get("usage") or {}
+    # Prefer the prompt/completion split when the model has per-direction rates
+    # and the provider echoed the split (output tokens cost ~4-5x input).
+    prompt = usage.get("prompt_tokens")
+    completion = usage.get("completion_tokens")
+    if (spec.cost_per_1k_in is not None and spec.cost_per_1k_out is not None
+            and prompt is not None and completion is not None):
+        return ((prompt / 1000.0) * spec.cost_per_1k_in
+                + (completion / 1000.0) * spec.cost_per_1k_out)
     total = usage.get("total_tokens")
     if total is None or not spec.cost_per_1k:
         return None
@@ -342,6 +373,38 @@ def _wants_json(response_format) -> bool:
     if isinstance(response_format, dict):
         return response_format.get("type") in ("json_object", "json_schema")
     return bool(response_format)
+
+
+_REFUSAL_MARKERS = (
+    "i cannot", "i can't", "i'm unable", "i am unable", "i don't know",
+    "as an ai", "i'm sorry", "i am sorry",
+)
+
+
+def _answer_ok(resp: Dict[str, Any], response_format) -> bool:
+    """Cheap deterministic quality check for cascade escalation. Returns False
+    (escalate) on an empty/too-short answer, an obvious refusal, or — when JSON
+    was requested — output that isn't valid JSON. No model call."""
+    content = _first_content(resp)
+    if content is None or not isinstance(content, str):
+        # A non-text message (e.g. tool_calls) is a legitimate answer.
+        return content is not None or _has_tool_calls(resp)
+    text = content.strip()
+    if len(text) < 2:
+        return False
+    if response_format is not None and _wants_json(response_format):
+        return _is_json(text)
+    lowered = text.lower()
+    if any(lowered.startswith(m) for m in _REFUSAL_MARKERS):
+        return False
+    return True
+
+
+def _has_tool_calls(resp: Dict[str, Any]) -> bool:
+    try:
+        return bool(resp["choices"][0]["message"].get("tool_calls"))
+    except (KeyError, IndexError, TypeError):
+        return False
 
 
 def _is_json(text: str) -> bool:

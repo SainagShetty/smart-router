@@ -68,3 +68,29 @@ def test_max_cost_filters_expensive():
     r = decide(cfg, cfg.models, 0.95)
     # frontier (0.009) filtered out; cheap (0.0006) is the most capable left
     assert r.model.cost_per_1k <= 0.001
+
+
+def test_sensitive_pins_local_beating_high_score(cfg):
+    r = decide(cfg, cfg.models, 0.95, Overrides(sensitive=True))
+    assert r.tier == "local"
+    assert r.model.provider == "ollama"
+    assert "sensitive" in r.reason
+
+
+def test_sensitive_pin_ignores_allow_overrides():
+    # even with overrides disabled, sensitive data must not egress
+    cfg = make_config(allow_overrides=False)
+    r = decide(cfg, cfg.models, 0.95, Overrides(sensitive=True))
+    assert r.model.provider == "ollama"
+
+
+def test_sensitive_beats_force_tier_by_raising(cfg):
+    # forcing a cloud-only tier on sensitive data must raise, never egress
+    with pytest.raises(NoEligibleModel):
+        decide(cfg, cfg.models, 0.1, Overrides(sensitive=True, force_tier="frontier"))
+
+
+def test_sensitive_raises_when_no_local_candidate(cfg):
+    cloud = [m for m in cfg.models if m.provider == "openrouter"]
+    with pytest.raises(NoEligibleModel):
+        decide(cfg, cloud, 0.2, Overrides(sensitive=True))

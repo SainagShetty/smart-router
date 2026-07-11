@@ -91,6 +91,32 @@ def test_client_streaming(config):
     assert chunks[0].decision_id
 
 
+def test_sensitive_keeps_hard_prompt_on_device(config):
+    core = RouterCore(config)
+    stub_providers(core)
+    resp, d = core.complete(
+        [{"role": "user", "content":
+          "design a distributed lock-free rate limiter and prove linearizability"}],
+        sensitive=True,
+    )
+    assert d.tier == "local"
+    assert d.provider == "ollama"
+
+
+def test_sensitive_raises_rather_than_egress(config):
+    core = RouterCore(config)
+    stub_providers(core)
+    # an image forces vision (cloud-only here); sensitive must raise, not egress
+    from smartrouter.errors import NoEligibleModel
+    with pytest.raises(NoEligibleModel):
+        core.complete(
+            [{"role": "user", "content": [
+                {"type": "text", "text": "what is in this image?"},
+                {"type": "image_url", "image_url": {"url": "data:x"}}]}],
+            sensitive=True,
+        )
+
+
 def test_classifier_failure_degrades_gracefully(config):
     core = RouterCore(config)
 

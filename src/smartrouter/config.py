@@ -41,6 +41,11 @@ class ModelSpec(BaseModel):
     provider: str  # key into RouterConfig.providers
     tier: str  # key into RouterConfig.tiers
     cost_per_1k: float = 0.0  # USD per 1k tokens (blended); used for tie-breaks/budget
+    # Optional per-direction rates. When both are set, cost is estimated from the
+    # prompt/completion split the provider echoes (output is typically ~4-5x
+    # input); otherwise it falls back to the blended cost_per_1k over total tokens.
+    cost_per_1k_in: Optional[float] = None
+    cost_per_1k_out: Optional[float] = None
     context_window: int = 8192
     capabilities: Capabilities = Field(default_factory=Capabilities)
     # Provider call defaults (temperature, etc.) merged into each request.
@@ -101,6 +106,10 @@ class PolicyConfig(BaseModel):
     fallback: FallbackDirection = "down"
     # Allow per-request force_tier / cheap_only overrides.
     allow_overrides: bool = True
+    # Default to cascade execution (cheapest-first, escalate on a bad answer)
+    # instead of trusting the difficulty score up front. Per-request cascade=
+    # overrides this.
+    cascade: bool = False
     # Tier used when the classifier errors out or no candidate matches a band.
     default_tier: Optional[str] = None
     # Optional hard cap on cost_per_1k of the chosen model.

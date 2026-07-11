@@ -45,6 +45,7 @@ class ChatRequest(BaseModel):
     force_tier: Optional[str] = None
     cheap_only: bool = False
     local_only: bool = False
+    cascade: Optional[bool] = None
     # logging controls (declared so they never leak into model_extra -> provider):
     # log_raw overrides the config default per request; source tags which service
     # sent it; sensitive marks rows for one-filter exclusion from training exports.
@@ -62,6 +63,7 @@ class RouteRequest(BaseModel):
     force_tier: Optional[str] = None
     cheap_only: bool = False
     local_only: bool = False
+    cascade: Optional[bool] = None
     log_raw: Optional[bool] = None
     source: Optional[str] = None
     sensitive: bool = False
@@ -100,6 +102,7 @@ def create_app(config: RouterConfig, api_key: Optional[str] = None):
             "force_tier": req.force_tier,
             "cheap_only": req.cheap_only,
             "local_only": req.local_only,
+            "cascade": req.cascade,
             "log_raw": req.log_raw,
             "source": req.source,
             "sensitive": req.sensitive,
@@ -170,10 +173,13 @@ def create_app(config: RouterConfig, api_key: Optional[str] = None):
     def stats():
         if not core.store:
             return {"logging": "disabled"}
+        local_providers = {n for n, p in config.providers.items() if p.is_local()}
+        local_models = {m.id for m in config.models if m.provider in local_providers}
         return {
             "total": core.store.count(),
             "labeled": core.store.count(labeled_only=True),
             "by_tier": core.store.tier_counts(),
+            "savings": core.store.savings_summary(local_models=local_models),
         }
 
     return app

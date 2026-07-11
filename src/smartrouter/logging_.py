@@ -41,7 +41,9 @@ CREATE TABLE IF NOT EXISTS decisions (
     label_source       TEXT,
     response_raw       TEXT,
     source             TEXT,
-    sensitive          INTEGER NOT NULL DEFAULT 0
+    sensitive          INTEGER NOT NULL DEFAULT 0,
+    reason             TEXT,
+    rejected           TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_decisions_label ON decisions(label);
 CREATE INDEX IF NOT EXISTS idx_decisions_embmodel ON decisions(embedding_model_id);
@@ -53,6 +55,8 @@ _MIGRATIONS = [
     ("response_raw", "TEXT"),
     ("source", "TEXT"),
     ("sensitive", "INTEGER NOT NULL DEFAULT 0"),
+    ("reason", "TEXT"),
+    ("rejected", "TEXT"),
 ]
 
 
@@ -104,6 +108,8 @@ class TrainingStore:
         log_raw: bool = False,
         source: Optional[str] = None,
         sensitive: bool = False,
+        reason: Optional[str] = None,
+        rejected: Optional[List[str]] = None,
     ) -> str:
         blob = None
         if embedding is not None:
@@ -114,14 +120,15 @@ class TrainingStore:
                    (decision_id, ts, prompt_sha256, prompt_raw, embedding,
                     embedding_model_id, features, score, chosen_tier, chosen_model,
                     candidates, cost, latency_ms, label, label_source,
-                    source, sensitive)
-                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                    source, sensitive, reason, rejected)
+                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
                 (
                     decision_id, time.time(), _sha256(prompt),
                     prompt if log_raw else None, blob, embedding_model_id,
                     json.dumps(features), score, chosen_tier, chosen_model,
                     json.dumps(candidates), cost, latency_ms, label, label_source,
-                    source, int(sensitive),
+                    source, int(sensitive), reason,
+                    json.dumps(rejected) if rejected is not None else None,
                 ),
             )
             self._conn.commit()
@@ -134,9 +141,15 @@ class TrainingStore:
         cost: Optional[float] = None,
         latency_ms: Optional[float] = None,
         chosen_model: Optional[str] = None,
+        chosen_tier: Optional[str] = None,
         response_raw: Optional[str] = None,
     ) -> None:
         """Record observed cost/latency and the model actually used (post-fallback).
+
+        ``chosen_tier`` is updated alongside ``chosen_model`` so cascade
+        escalation / error-fallback can't leave the tier pointing at the
+        originally-picked tier while the model reflects the one that answered
+        (which would misattribute cloud calls to the local tier in stats).
 
         ``response_raw`` (the model's answer — the distillation target) is only
         written when provided, so callers honoring log_raw=False never touch it.
@@ -144,8 +157,10 @@ class TrainingStore:
         with self._lock:
             self._conn.execute(
                 "UPDATE decisions SET cost=?, latency_ms=?, chosen_model=?, "
+                "chosen_tier=COALESCE(?, chosen_tier), "
                 "response_raw=COALESCE(?, response_raw) WHERE decision_id=?",
-                (cost, latency_ms, chosen_model, response_raw, decision_id),
+                (cost, latency_ms, chosen_model, chosen_tier, response_raw,
+                 decision_id),
             )
             self._conn.commit()
 
@@ -185,6 +200,42 @@ class TrainingStore:
                 "SELECT chosen_tier, COUNT(*) FROM decisions GROUP BY chosen_tier"
             ).fetchall()
         return {tier: n for tier, n in rows}
+
+    def savings_summary(self, local_models=None) -> Dict[str, Any]:
+        """Honest, computed-from-persisted-data view of what routing did: how
+        much traffic stayed on-device (the free-local floor) and the observed
+        spend. Reads ~0 on-device for all-cloud traffic — no invented baseline.
+        ``local_models`` names the models that run locally (free)."""
+        local_models = set(local_models or [])
+        with self._lock:
+            total = int(self._conn.execute(
+                "SELECT COUNT(*) FROM decisions").fetchone()[0])
+            total_cost = self._conn.execute(
+                "SELECT COALESCE(SUM(cost), 0) FROM decisions").fetchone()[0]
+            by_tier = {
+                tier: n for tier, n in self._conn.execute(
+                    "SELECT chosen_tier, COUNT(*) FROM decisions "
+                    "GROUP BY chosen_tier").fetchall()
+            }
+            on_device = free = 0
+            if local_models:
+                marks = ",".join("?" * len(local_models))
+                on_device = int(self._conn.execute(
+                    f"SELECT COUNT(*) FROM decisions WHERE chosen_model IN ({marks})",
+                    tuple(local_models)).fetchone()[0])
+                free = int(self._conn.execute(
+                    f"SELECT COUNT(*) FROM decisions WHERE chosen_model IN ({marks}) "
+                    "AND COALESCE(cost, 0) = 0",
+                    tuple(local_models)).fetchone()[0])
+        pct = round(100.0 * on_device / total, 1) if total else 0.0
+        return {
+            "total": total,
+            "on_device": on_device,
+            "on_device_pct": pct,
+            "free": free,
+            "total_cost": round(float(total_cost), 6),
+            "by_tier": by_tier,
+        }
 
     def training_matrix(self, embedding_model_id: str) -> Tuple[np.ndarray, List[int]]:
         """Stored embeddings + labels for rows in a given embedding space.
