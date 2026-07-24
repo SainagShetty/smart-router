@@ -32,9 +32,10 @@ local-embed = ["sentence-transformers>=2.2"]
 routellm = ["routellm>=0.2"]
 # Tracing only (not the LangChain framework) per stack conventions.
 langfuse = ["langfuse>=2"]
-# Run the shared router as an HTTP service.
-server = ["fastapi>=0.110", "uvicorn[standard]>=0.27"]
-dev = ["pytest>=7", "fastapi>=0.110", "uvicorn>=0.27"]
+# Run the shared router as an HTTP service (also powers `smartrouter ui`,
+# which needs ruamel.yaml to save config edits without clobbering comments).
+server = ["fastapi>=0.110", "uvicorn[standard]>=0.27", "ruamel.yaml>=0.17"]
+dev = ["pytest>=7", "fastapi>=0.110", "uvicorn>=0.27", "ruamel.yaml>=0.17"]
 
 [project.scripts]
 smartrouter = "smartrouter.cli:main"

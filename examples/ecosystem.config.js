@@ -26,5 +26,17 @@ module.exports = {
       autorestart: true,
       max_restarts: 10,
     },
+    {
+      name: "smart-router-ui",
+      // config-editing UI + decision-log stats: http://127.0.0.1:4001. Edits
+      // tiers/models in the same router.yaml the `smart-router` app loads;
+      // restart that app after saving for changes to take effect (no hot-reload).
+      script: "/Users/sainagshetty/Development/smart-router/.venv/bin/smartrouter",
+      args: "ui --config ./examples/router.yaml --host 127.0.0.1 --port 4001",
+      interpreter: "none",
+      cwd: "/Users/sainagshetty/Development/smart-router",
+      autorestart: true,
+      max_restarts: 10,
+    },
   ],
 };
