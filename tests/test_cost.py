@@ -45,3 +45,95 @@ def test_none_when_no_pricing():
 def test_none_when_no_usage():
     spec = ModelSpec(id="m", provider="p", tier="t", cost_per_1k=0.001)
     assert _estimate_cost({}, spec) is None
+
+
+# ---- streaming: cost must be recorded, not silently dropped ------------------
+
+import sqlite3
+
+from smartrouter import RouterCore
+from smartrouter.config import ProviderConfig
+from smartrouter.providers.openai_compatible import OpenAICompatibleProvider
+
+from conftest import make_config, stub_providers
+
+
+def _stub_stream_with_usage(core, usage, content="hi"):
+    """Stream stub that emits a trailing usage-only chunk, as providers do when
+    stream_options.include_usage is set."""
+    def make(_name):
+        def stream(model, messages, **p):
+            yield {"choices": [{"delta": {"content": content}}]}
+            yield {"choices": [], "usage": usage}
+        return stream
+
+    for name, prov in core.providers.items():
+        prov.stream = make(name)
+
+
+def _cost_of(db_path, decision_id):
+    conn = sqlite3.connect(db_path)
+    try:
+        return conn.execute(
+            "SELECT cost, chosen_tier FROM decisions WHERE decision_id=?",
+            (decision_id,),
+        ).fetchone()
+    finally:
+        conn.close()
+
+
+def test_streaming_records_cost_from_trailing_usage_chunk(tmp_db):
+    core = RouterCore(make_config(db_path=tmp_db))
+    stub_providers(core)
+    _stub_stream_with_usage(core, {"total_tokens": 1000})
+    chunks, d = core.stream([{"role": "user", "content": "hi"}], force_tier="cheap")
+    list(chunks)  # drain — cost is written when the generator finishes
+    core.close()
+    cost, tier = _cost_of(tmp_db, d.decision_id)
+    assert cost is not None, "streamed call recorded no cost"
+    assert round(cost, 6) == 0.0006  # gpt-4o-mini @ 0.0006/1k over 1000 tokens
+    assert tier == "cheap"
+
+
+def test_streaming_cost_is_none_when_provider_sends_no_usage(tmp_db):
+    core = RouterCore(make_config(db_path=tmp_db))
+    stub_providers(core)  # default stub yields no usage chunk
+    chunks, d = core.stream([{"role": "user", "content": "hi"}], force_tier="cheap")
+    list(chunks)
+    core.close()
+    cost, _ = _cost_of(tmp_db, d.decision_id)
+    assert cost is None
+
+
+def test_stream_options_requested_for_paid_provider():
+    prov = OpenAICompatibleProvider(
+        "openrouter", ProviderConfig(type="openrouter", api_key="x")
+    )
+    payload = prov._payload("m", [{"role": "user", "content": "hi"}], {}, True)
+    assert payload["stream_options"] == {"include_usage": True}
+
+
+def test_stream_options_not_sent_to_local_provider():
+    # Ollama has no per-token rate, and not every local server accepts the field.
+    prov = OpenAICompatibleProvider("ollama", ProviderConfig(type="ollama"))
+    payload = prov._payload("m", [{"role": "user", "content": "hi"}], {}, True)
+    assert "stream_options" not in payload
+
+
+def test_stream_options_absent_on_non_streaming_calls():
+    prov = OpenAICompatibleProvider(
+        "openrouter", ProviderConfig(type="openrouter", api_key="x")
+    )
+    payload = prov._payload("m", [{"role": "user", "content": "hi"}], {}, False)
+    assert "stream_options" not in payload
+
+
+def test_caller_supplied_stream_options_wins():
+    prov = OpenAICompatibleProvider(
+        "openrouter", ProviderConfig(type="openrouter", api_key="x")
+    )
+    payload = prov._payload(
+        "m", [{"role": "user", "content": "hi"}],
+        {"stream_options": {"include_usage": False}}, True,
+    )
+    assert payload["stream_options"] == {"include_usage": False}

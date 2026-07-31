@@ -273,8 +273,15 @@ class RouterCore:
 
             def _emit():
                 pieces: List[str] = []
+                usage: Dict[str, Any] = {}
 
                 def _collect(chunk):
+                    # Providers send usage totals in a trailing chunk (requested
+                    # via stream_options); it may arrive with an empty choices
+                    # list, so collect it independently of the content deltas.
+                    chunk_usage = chunk.get("usage")
+                    if chunk_usage:
+                        usage.update(chunk_usage)
                     if decision.log_raw:
                         piece = _delta_content(chunk)
                         if piece:
@@ -289,8 +296,13 @@ class RouterCore:
                 latency_ms = (time.time() - t0) * 1000.0
                 if self.store:
                     self.store.update_outcome(
-                        decision.decision_id, latency_ms=latency_ms,
+                        decision.decision_id,
+                        cost=_estimate_cost({"usage": usage}, spec) if usage else None,
+                        latency_ms=latency_ms,
                         chosen_model=spec.id,
+                        # Mirrors _finalize: a stream that fell back to another
+                        # tier must not leave the tier pointing at the original.
+                        chosen_tier=spec.tier,
                         response_raw="".join(pieces) if pieces else None,
                     )
 
@@ -324,6 +336,12 @@ def _features_dict(feats) -> Dict[str, Any]:
         "code_ratio": feats.code_ratio,
         "has_cjk": feats.has_cjk,
         "raw_chars": feats.raw_chars,
+        # Request shape (see RequestFeatures). Goes into the existing `features`
+        # JSON column, so no schema migration — old rows simply lack the keys.
+        "n_tool_msgs": feats.n_tool_msgs,
+        "n_assistant_msgs": feats.n_assistant_msgs,
+        "head_chars": feats.head_chars,
+        "tail_chars": feats.tail_chars,
     }
 
 

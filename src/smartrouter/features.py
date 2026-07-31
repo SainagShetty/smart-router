@@ -27,6 +27,15 @@ class RequestFeatures:
     code_ratio: float
     has_cjk: bool
     raw_chars: int
+    # Shape of the request, so a caller's agent loop can be told apart from one
+    # long chat turn. Both look identical in `text` (tool results are folded into
+    # it), but they are different populations: in a loop the transcript grows with
+    # every observation, so length-derived features saturate and stop carrying
+    # information. Recorded for analysis only — nothing routes on them yet.
+    n_tool_msgs: int = 0
+    n_assistant_msgs: int = 0
+    head_chars: int = 0  # first user message — the task that sets the difficulty ceiling
+    tail_chars: int = 0  # newest tool result — the observation the next step reacts to
     extra: Dict[str, Any] = field(default_factory=dict)
 
 
@@ -69,8 +78,18 @@ def extract(
     user_texts: List[str] = []
     all_text_chars = 0
     has_images = False
+    n_tool_msgs = 0
+    n_assistant_msgs = 0
+    head_chars = 0
+    tail_chars = 0
 
     for msg in messages:
+        role = msg.get("role")
+        if role == "tool":
+            n_tool_msgs += 1
+        elif role == "assistant":
+            n_assistant_msgs += 1
+        msg_chars = 0
         parts = _content_parts(msg.get("content"))
         for part in parts:
             if _part_is_image(part):
@@ -79,8 +98,15 @@ def extract(
             txt = _part_text(part)
             if txt:
                 all_text_chars += len(txt)
-                if msg.get("role") in ("user", "tool", None):
+                msg_chars += len(txt)
+                if role in ("user", "tool", None):
                     user_texts.append(txt)
+        # First user turn and newest tool result, measured per message rather than
+        # from the flattened text — once joined the boundaries are unrecoverable.
+        if role == "user" and head_chars == 0:
+            head_chars = msg_chars
+        if role == "tool":
+            tail_chars = msg_chars
 
     text = "\n".join(user_texts).strip()
     # Fall back to all message text if there were no user turns (e.g. system-only).
@@ -111,4 +137,8 @@ def extract(
         code_ratio=round(code_ratio, 4),
         has_cjk=bool(_CJK.search(text)),
         raw_chars=all_text_chars,
+        n_tool_msgs=n_tool_msgs,
+        n_assistant_msgs=n_assistant_msgs,
+        head_chars=head_chars,
+        tail_chars=tail_chars,
     )

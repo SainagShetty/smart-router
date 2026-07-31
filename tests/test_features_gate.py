@@ -55,3 +55,54 @@ def test_gate_rejects_tools_unsupported(config):
     res = capabilities.gate(config.models, f)
     # all three configured models support tools, so all pass
     assert len(res.candidates) == 3
+
+
+# ---- request shape: telling an agent loop from one long chat turn -----------
+
+def _agent_messages(n_steps=3, tool_result="x" * 500):
+    """A tool-calling loop: task, then (assistant tool_call -> tool result) xN."""
+    msgs = [{"role": "user", "content": "book the 8:30 class"}]
+    for _ in range(n_steps):
+        msgs.append({"role": "assistant", "content": "calling a tool"})
+        msgs.append({"role": "tool", "content": tool_result})
+    return msgs
+
+
+def test_shape_counts_tool_and_assistant_messages():
+    f = extract(_agent_messages(n_steps=3))
+    assert f.n_tool_msgs == 3
+    assert f.n_assistant_msgs == 3
+
+
+def test_shape_is_zero_for_plain_chat():
+    f = extract([{"role": "user", "content": "what is 2+2"}])
+    assert f.n_tool_msgs == 0
+    assert f.n_assistant_msgs == 0
+    assert f.tail_chars == 0
+
+
+def test_head_chars_is_the_first_user_turn_not_the_longest():
+    # The task is short; a later user turn is long. head_chars must track the
+    # task, since that is what sets the difficulty ceiling for the whole run.
+    f = extract([
+        {"role": "user", "content": "go"},
+        {"role": "assistant", "content": "ok"},
+        {"role": "user", "content": "y" * 900},
+    ])
+    assert f.head_chars == 2
+
+
+def test_tail_chars_is_the_newest_tool_result():
+    msgs = _agent_messages(n_steps=2)
+    msgs.append({"role": "assistant", "content": "calling a tool"})
+    msgs.append({"role": "tool", "content": "z" * 77})
+    f = extract(msgs)
+    assert f.tail_chars == 77
+
+
+def test_shape_distinguishes_agent_loop_from_one_long_turn():
+    """Both flatten to similar text; only the shape fields tell them apart."""
+    loop = extract(_agent_messages(n_steps=4))
+    chat = extract([{"role": "user", "content": "x" * loop.raw_chars}])
+    assert abs(loop.raw_chars - chat.raw_chars) < 100  # comparable size
+    assert loop.n_tool_msgs == 4 and chat.n_tool_msgs == 0

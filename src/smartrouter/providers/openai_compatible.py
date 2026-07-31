@@ -41,6 +41,13 @@ class OpenAICompatibleProvider(Provider):
         payload = {"model": model, "messages": list(messages)}
         payload.update(params or {})
         payload["stream"] = stream
+        if stream and not self.config.is_local():
+            # Streamed responses carry no usage totals unless asked for, which is
+            # why streamed calls used to record no cost at all. Only worth asking
+            # of paid providers — local models have no per-token rate, so their
+            # cost is None either way, and not every local server accepts the
+            # field. An explicit caller-supplied value wins.
+            payload.setdefault("stream_options", {"include_usage": True})
         return payload
 
     def complete(self, model: str, messages: List[Message], **params) -> Dict[str, Any]:
