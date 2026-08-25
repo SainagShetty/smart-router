@@ -224,13 +224,20 @@ changed in one place.
   SSE), `POST /route` (decision only), `POST /feedback`, `GET /stats`, `GET /health`.
   Per-request overrides (`local_only`/`force_tier`/`cheap_only`) ride in the JSON body.
 - **Auth:** optional bearer token from `SMARTROUTER_API_KEY` (recommended — the process
-  holds provider keys); `/health` stays open.
+  holds provider keys); `/health` stays open. When the token is set, **direct loopback
+  callers are exempt by default**: a token in front of them adds no protection (they can
+  already read the provider keys from this process's env) while breaking every co-located
+  service. Reverse proxies (`tailscale serve`, Caddy) also connect over loopback, so they
+  are distinguished by their `X-Forwarded-For`/`Forwarded` header and *must* present the
+  token. `SMARTROUTER_TRUST_LOOPBACK=0` requires it from everyone — set this on shared or
+  multi-tenant hosts, where "can open a loopback socket" no longer implies "is trusted".
 - **Concurrency:** sync endpoints run in uvicorn's threadpool over one shared `RouterCore`;
   `TrainingStore` is thread-safe (`check_same_thread=False` + lock).
 - **Run it:** `smartrouter serve --config router.yaml --host 127.0.0.1 --port 4000`, or
   `SMARTROUTER_CONFIG=router.yaml uvicorn smartrouter.server:app`. Deploy as a PM2 daemon
-  (`examples/ecosystem.config.js`); expose beyond localhost via Caddy + Cloudflare Tunnel,
-  not by binding `0.0.0.0`.
+  (`examples/ecosystem.config.js`). Expose beyond localhost with a reverse proxy, never by
+  binding `0.0.0.0`: `tailscale serve --bg --http=4000 http://127.0.0.1:4000` for private
+  tailnet access, or Caddy + Cloudflare Tunnel for public hostnames.
 - **Embedded mode** (`RouterCore`/`RouterClient` in-process) remains for one-off scripts.
 
 ## 11. Dependencies

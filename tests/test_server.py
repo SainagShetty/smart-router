@@ -95,6 +95,67 @@ def test_auth_required_when_key_set():
     assert ok.status_code == 200
 
 
+def _loopback_client(api_key="secret", trust_loopback=True):
+    """TestClient that presents itself as a direct on-box caller."""
+    app = create_app(
+        make_config(), api_key=api_key, trust_loopback=trust_loopback
+    )
+    stub_providers(app.state.core)
+    return TestClient(app, client=("127.0.0.1", 54321))
+
+
+def test_loopback_exempt_from_auth():
+    # Co-located services (resume-bot, jarvis, ...) send no Authorization header.
+    c = _loopback_client()
+    r = c.post("/route", json={"messages": [{"role": "user", "content": "hi"}]})
+    assert r.status_code == 200
+
+
+def test_proxied_loopback_still_requires_token():
+    # tailscale serve / Caddy connect over loopback but set a forwarding header;
+    # those requests came from off-box and must authenticate.
+    c = _loopback_client()
+    for headers in (
+        {"X-Forwarded-For": "100.126.90.22"},
+        {"Forwarded": "for=100.126.90.22"},
+    ):
+        assert c.post(
+            "/route",
+            headers=headers,
+            json={"messages": [{"role": "user", "content": "hi"}]},
+        ).status_code == 401
+
+    ok = c.post(
+        "/route",
+        headers={"X-Forwarded-For": "100.126.90.22", "Authorization": "Bearer secret"},
+        json={"messages": [{"role": "user", "content": "hi"}]},
+    )
+    assert ok.status_code == 200
+
+
+def test_trust_loopback_disabled_requires_token_on_box():
+    c = _loopback_client(trust_loopback=False)
+    assert c.post(
+        "/route", json={"messages": [{"role": "user", "content": "hi"}]}
+    ).status_code == 401
+    ok = c.post(
+        "/route",
+        headers={"Authorization": "Bearer secret"},
+        json={"messages": [{"role": "user", "content": "hi"}]},
+    )
+    assert ok.status_code == 200
+
+
+def test_loopback_exemption_is_moot_without_a_key():
+    # No token configured -> everything is open, proxied or not (today's behavior).
+    c = _loopback_client(api_key=None)
+    assert c.post(
+        "/route",
+        headers={"X-Forwarded-For": "100.126.90.22"},
+        json={"messages": [{"role": "user", "content": "hi"}]},
+    ).status_code == 200
+
+
 def test_no_eligible_model_returns_422():
     c = _client()
     # an image request with tools forcing nothing eligible? image needs vision;

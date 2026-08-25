@@ -7,9 +7,24 @@ request (local Gemma → cheap cloud → frontier), escalating only when needed.
 
 ## Endpoint
 
-- **Base URL:** `http://127.0.0.1:4000/v1`
-- **Auth:** none right now (bound to localhost). Any non-empty `api_key` string is accepted.
-  (If a bearer token is later enabled, send `Authorization: Bearer <token>`.)
+- **Base URL (on the Mac Mini):** `http://127.0.0.1:4000/v1`
+- **Base URL (from another tailnet device):**
+  `http://sainags-mac-mini.tailc1c587.ts.net:4000/v1`
+- **Auth:** depends on which of those two you use.
+  - **From the Mini itself** — none. Any non-empty `api_key` string is accepted, so
+    every co-located service works unchanged.
+  - **Over Tailscale** — a bearer token is **required**:
+    `Authorization: Bearer <token>`. The token is in `~/.config/smartrouter/tailnet-token`
+    on the Mini (mode 600). Without it you get `401`.
+
+  The split exists because a token in front of loopback protects nothing — anything
+  that can open a loopback socket here can already read the provider keys out of the
+  server process's environment. Off-box callers are the ones worth authenticating.
+  `tailscale serve` proxies *through* loopback, so the server tells the two apart by
+  the `X-Forwarded-For` header it adds. Set `SMARTROUTER_TRUST_LOOPBACK=0` to require
+  the token from everyone, including on-box callers.
+- **`/health` is always open**, on both paths — it exposes no secrets and is what
+  uptime checks hit.
 - **Model field:** required by the OpenAI schema but **ignored** — the router decides. Pass
   `"auto"`.
 - Standard sampling params work normally: `temperature`, `max_tokens`, `top_p`, `stop`,

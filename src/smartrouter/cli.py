@@ -171,10 +171,14 @@ def _serve(args):
     except Exception:  # pragma: no cover - optional extra
         sys.exit("the server requires `pip install smartrouter[server]`")
 
-    from .server import create_app
+    from .server import create_app, trust_loopback_from_env
 
     config = _resolve_config(args.config)
-    app = create_app(config, api_key=os.environ.get("SMARTROUTER_API_KEY"))
+    app = create_app(
+        config,
+        api_key=os.environ.get("SMARTROUTER_API_KEY"),
+        trust_loopback=trust_loopback_from_env(),
+    )
     uvicorn.run(app, host=args.host, port=args.port, log_level=args.log_level)
 
 

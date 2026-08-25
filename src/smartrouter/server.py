@@ -9,8 +9,20 @@ Endpoints
 
 One shared RouterCore (one classifier, one central decision log, provider keys in
 one place). Sync endpoints run in the server's threadpool; the decision store is
-thread-safe. Optional bearer auth via the SMARTROUTER_API_KEY env var — recommended,
-since this process holds your provider keys.
+thread-safe.
+
+Auth: optional bearer token via the SMARTROUTER_API_KEY env var — recommended,
+since this process holds your provider keys. When the token is set, direct
+loopback callers are exempt by default: they already run on this host, where the
+provider keys sit in this process's environment, so a token in front of them adds
+no protection while breaking every co-located service. Requests arriving through a
+reverse proxy (tailscale serve, Caddy) also connect over loopback, so they are
+identified by their forwarding header (X-Forwarded-For / Forwarded) and must
+present the token. Set SMARTROUTER_TRUST_LOOPBACK=0 to require it from everyone.
+
+That default assumes anything able to open a loopback socket on this host is
+already trusted. On a shared or multi-tenant machine that is not true — set
+SMARTROUTER_TRUST_LOOPBACK=0 there and give each client the token.
 
 Run it:
     smartrouter serve --config router.yaml --host 127.0.0.1 --port 4000
@@ -29,6 +41,17 @@ from . import __version__
 from .config import RouterConfig
 from .core import RouterCore
 from .errors import NoEligibleModel, ProviderError
+
+# Imported at module scope on purpose: `from __future__ import annotations` makes
+# every annotation a string, and FastAPI resolves the `request: Request` hint in
+# require_auth against these globals -- a create_app-local import would leave it
+# unresolvable and get silently treated as a body field (422 on every call).
+# Guarded so importing this module without the [server] extra still works;
+# create_app raises the actionable ImportError in that case.
+try:
+    from starlette.requests import Request
+except ImportError:  # pragma: no cover - optional extra
+    Request = Any  # type: ignore[misc,assignment]
 
 
 class ChatRequest(BaseModel):
@@ -75,7 +98,25 @@ class FeedbackRequest(BaseModel):
     source: str = "api"
 
 
-def create_app(config: RouterConfig, api_key: Optional[str] = None):
+# Loopback source addresses that skip bearer auth when `trust_loopback` is on.
+# IPv6-mapped IPv4 shows up when the socket is dual-stack.
+_LOOPBACK_HOSTS = frozenset({"127.0.0.1", "::1", "::ffff:127.0.0.1"})
+
+
+def trust_loopback_from_env() -> bool:
+    """Whether on-box callers skip bearer auth. Both entry points read this."""
+    return os.environ.get("SMARTROUTER_TRUST_LOOPBACK", "1").strip().lower() not in (
+        "0",
+        "false",
+        "no",
+    )
+
+
+def create_app(
+    config: RouterConfig,
+    api_key: Optional[str] = None,
+    trust_loopback: bool = True,
+):
     try:
         from fastapi import Depends, FastAPI, Header, HTTPException
         from fastapi.responses import StreamingResponse
@@ -88,8 +129,26 @@ def create_app(config: RouterConfig, api_key: Optional[str] = None):
     app = FastAPI(title="smartrouter", version=__version__)
     app.state.core = core
 
-    def require_auth(authorization: Optional[str] = Header(default=None)):
+    def require_auth(
+        request: Request,
+        authorization: Optional[str] = Header(default=None),
+    ):
         if not api_key:
+            return
+        # Direct loopback callers are already on this host, where the provider
+        # keys sit in this process's environment -- a bearer token in front of
+        # them buys nothing, and requiring one would break every co-located
+        # service. Reverse proxies (tailscale serve, Caddy) also connect over
+        # loopback, so the exemption additionally requires that no forwarding
+        # header is present: those requests originated off-box and must
+        # authenticate. Set SMARTROUTER_TRUST_LOOPBACK=0 to require the token
+        # from everyone, loopback included.
+        client = request.client.host if request.client else None
+        forwarded = (
+            "x-forwarded-for" in request.headers
+            or "forwarded" in request.headers
+        )
+        if trust_loopback and client in _LOOPBACK_HOSTS and not forwarded:
             return
         expected = f"Bearer {api_key}"
         if authorization != expected:
@@ -188,7 +247,11 @@ def create_app(config: RouterConfig, api_key: Optional[str] = None):
 def _app_from_env():
     path = os.environ.get("SMARTROUTER_CONFIG", "router.yaml")
     config = RouterConfig.from_yaml(path)
-    return create_app(config, api_key=os.environ.get("SMARTROUTER_API_KEY"))
+    return create_app(
+        config,
+        api_key=os.environ.get("SMARTROUTER_API_KEY"),
+        trust_loopback=trust_loopback_from_env(),
+    )
 
 
 def __getattr__(name):

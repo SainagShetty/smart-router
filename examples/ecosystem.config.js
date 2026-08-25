@@ -20,7 +20,13 @@ module.exports = {
       env: {
         // Set these in PM2's environment (do not hardcode secrets here):
         // OPENROUTER_API_KEY: "...",
-        // SMARTROUTER_API_KEY: "...",   // optional bearer token for clients
+        // SMARTROUTER_API_KEY: "...",   // bearer token required of off-box callers
+        //   (on-box loopback callers stay exempt unless you also set
+        //   SMARTROUTER_TRUST_LOOPBACK=0 -- see docs/CONNECTING.md)
+        //
+        // NB: these live only in ~/.pm2/dump.pm2 once you `pm2 save`. A bare
+        // `pm2 restart smart-router --update-env` from a shell that lacks them
+        // will wipe them and break the router -- export them first.
         SMARTROUTER_CONFIG: "./examples/router.yaml",
       },
       autorestart: true,
