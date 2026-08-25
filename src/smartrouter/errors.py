@@ -23,3 +23,15 @@ class ProviderError(SmartRouterError):
 
 class ConfigError(SmartRouterError):
     """Invalid configuration discovered at runtime."""
+
+
+class ConfigNotHotReloadable(ConfigError):
+    """A config change is valid, but cannot be applied to a running process.
+
+    Providers hold live httpx clients that in-flight requests are using, and
+    logging holds an open SQLite connection the store writes through. Swapping
+    either under traffic would strand something. Rather than half-apply such a
+    change -- or worse, appear to apply it -- reload refuses and says which
+    section needs a restart. The revision is still saved; only the way it is
+    put into force differs.
+    """

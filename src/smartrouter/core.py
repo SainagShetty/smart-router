@@ -15,7 +15,7 @@ from typing import Any, Dict, Iterator, List, Optional, Sequence, Tuple
 from . import capabilities, features as features_mod
 from .classifiers import build_classifier
 from .config import ModelSpec, RouterConfig
-from .errors import NoEligibleModel, ProviderError
+from .errors import ConfigNotHotReloadable, NoEligibleModel, ProviderError
 from .logging_ import TrainingStore
 from .policy import Overrides, decide
 from .providers import build_provider
@@ -99,6 +99,41 @@ class RouterCore:
     @property
     def providers(self) -> Dict[str, Any]:
         return self._live.providers
+
+    # ---- reload -----------------------------------------------------------
+
+    def reload(self, new_config: RouterConfig) -> None:
+        """Put a new config into force without restarting.
+
+            tiers, models, policy   swap freely
+            providers, logging      refused -- restart required
+            classifier              refused -- see below
+
+        Only the first group is safe to change under live traffic. Providers own
+        httpx clients that in-flight requests are holding; logging owns the open
+        SQLite connection the store writes through; the classifier is loaded once
+        at construction. Swapping any of them here would strand something, and
+        silently: the request already in flight would never know. Refusing is
+        what makes the unsafe case impossible rather than merely unlikely.
+
+        Because providers provably cannot differ by the time the swap happens,
+        the EXISTING providers dict is carried over rather than rebuilt. That
+        keeps object identity stable (test stubs patch these in place), avoids
+        constructing httpx clients nobody asked for, and removes the only step
+        of the swap that could have raised.
+
+        The assignment is a single statement over a frozen pair, so a request
+        either sees the whole old config or the whole new one -- never a mix.
+        In-flight requests finish against the snapshot they already took.
+        """
+        live = self._live
+        for section in ("providers", "logging", "classifier"):
+            if getattr(new_config, section) != getattr(live.config, section):
+                raise ConfigNotHotReloadable(
+                    f"`{section}` changed; that cannot be applied to a running "
+                    "process. Save the revision and restart smart-router."
+                )
+        self._live = _Live(new_config, live.providers)
 
     # ---- decision ---------------------------------------------------------
 
