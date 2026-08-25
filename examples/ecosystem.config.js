@@ -27,20 +27,14 @@ module.exports = {
         // NB: these live only in ~/.pm2/dump.pm2 once you `pm2 save`. A bare
         // `pm2 restart smart-router --update-env` from a shell that lacks them
         // will wipe them and break the router -- export them first.
-        SMARTROUTER_CONFIG: "./examples/router.yaml",
+        // The RENDERED config, not this repo's example. The active revision
+        // lives in smartrouter.db and renders to this path; the router loads
+        // the file, which is what keeps the database off the boot path -- a
+        // lock there at 03:30 must never stop the gateway starting.
+        SMARTROUTER_CONFIG: "/Users/sainagshetty/.config/smartrouter/router.yaml",
+        // SMARTROUTER_ADMIN_TOKEN: "..."   // required by /admin/*; Caddy
+        //   injects it for browsers so the token never reaches one.
       },
-      autorestart: true,
-      max_restarts: 10,
-    },
-    {
-      name: "smart-router-ui",
-      // config-editing UI + decision-log stats: http://127.0.0.1:4001. Edits
-      // tiers/models in the same router.yaml the `smart-router` app loads;
-      // restart that app after saving for changes to take effect (no hot-reload).
-      script: "/Users/sainagshetty/Development/smart-router/.venv/bin/smartrouter",
-      args: "ui --config ./examples/router.yaml --host 127.0.0.1 --port 4001",
-      interpreter: "none",
-      cwd: "/Users/sainagshetty/Development/smart-router",
       autorestart: true,
       max_restarts: 10,
     },

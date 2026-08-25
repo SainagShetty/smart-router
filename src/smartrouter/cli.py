@@ -182,25 +182,6 @@ def _serve(args):
     uvicorn.run(app, host=args.host, port=args.port, log_level=args.log_level)
 
 
-def _ui(args):
-    try:
-        import uvicorn
-    except Exception:  # pragma: no cover - optional extra
-        sys.exit("the UI requires `pip install smartrouter[server]`")
-
-    config_path = _resolve_config_path(args.config)
-    if not config_path:
-        sys.exit(
-            "no config found. Pass --config, set SMARTROUTER_CONFIG, or run "
-            "`smartrouter init` to create one."
-        )
-
-    from .ui_server import create_app
-
-    app = create_app(config_path)
-    uvicorn.run(app, host=args.host, port=args.port)
-
-
 def _add_route_flags(p):
     p.add_argument("prompt", nargs="*", help="the prompt (or pipe via stdin)")
     p.add_argument("--config")
@@ -238,12 +219,6 @@ def main(argv=None):
     serve.add_argument("--port", type=int, default=4000)
     serve.add_argument("--log-level", default="info")
     serve.set_defaults(func=_serve)
-
-    ui = sub.add_parser("ui", help="run the router configuration UI")
-    ui.add_argument("--config")
-    ui.add_argument("--host", default="127.0.0.1")
-    ui.add_argument("--port", type=int, default=4001)
-    ui.set_defaults(func=_ui)
 
     args = parser.parse_args(argv)
     args.func(args)

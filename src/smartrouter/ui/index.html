@@ -1,258 +1,254 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="en">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>SmartRouter Config</title>
-    <script src="https://cdn.tailwindcss.com"></script>
-    <script src="https://unpkg.com/alpinejs" defer></script>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>smart-router</title>
+<style>
+  :root{
+    --bg:#000; --panel:#0c0c0e; --line:#1e1e22; --line2:#2a2a30;
+    --ink:#f2f2f4; --mid:#9a9aa4; --dim:#5e5e68;
+    --ok:#4ade80; --warn:#fbbf24; --crit:#f87171; --accent:#fff;
+    --mono:ui-monospace,SFMono-Regular,Menlo,monospace;
+    --sans:-apple-system,BlinkMacSystemFont,"Segoe UI",system-ui,sans-serif;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);font-family:var(--sans);
+       font-size:15px;line-height:1.55;-webkit-font-smoothing:antialiased}
+  .wrap{max-width:60rem;margin:0 auto;padding:2rem 1.25rem 5rem;
+        display:flex;flex-direction:column;gap:2rem}
+  header{display:flex;flex-wrap:wrap;align-items:baseline;gap:.5rem 1.25rem;
+         padding-bottom:1rem;border-bottom:1px solid var(--line)}
+  h1{font-size:1.15rem;font-weight:600;margin:0;letter-spacing:-.01em}
+  .rev{font-family:var(--mono);font-size:.8rem;color:var(--mid)}
+  .rev b{color:var(--ink);font-weight:500}
+  h2{font-size:.72rem;font-weight:600;letter-spacing:.12em;text-transform:uppercase;
+     color:var(--dim);margin:0 0 .75rem}
+  .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(8rem,1fr));
+        gap:1px;background:var(--line);border:1px solid var(--line)}
+  .cell{background:var(--panel);padding:.85rem 1rem;display:flex;
+        flex-direction:column;gap:.2rem}
+  .cell .k{font-family:var(--mono);font-size:.65rem;letter-spacing:.1em;
+           text-transform:uppercase;color:var(--dim)}
+  .cell .v{font-family:var(--mono);font-size:1.4rem;font-variant-numeric:tabular-nums}
+  textarea{width:100%;min-height:20rem;background:var(--panel);color:var(--ink);
+           border:1px solid var(--line);border-radius:0;padding:1rem;
+           font-family:var(--mono);font-size:.78rem;line-height:1.6;resize:vertical}
+  textarea:focus{outline:none;border-color:var(--line2)}
+  .row{display:flex;flex-wrap:wrap;gap:.6rem;align-items:center}
+  button{font-family:var(--sans);font-size:.85rem;font-weight:500;padding:.55rem 1.1rem;
+         border:1px solid var(--line2);background:transparent;color:var(--ink);
+         cursor:pointer;border-radius:2px}
+  button:hover{border-color:var(--mid)}
+  button.primary{background:var(--accent);color:#000;border-color:var(--accent)}
+  button.primary:hover{opacity:.88}
+  button:disabled{opacity:.35;cursor:not-allowed}
+  button:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+  pre{font-family:var(--mono);font-size:.75rem;line-height:1.55;margin:0;
+      padding:1rem;background:var(--panel);border:1px solid var(--line);
+      overflow-x:auto;white-space:pre}
+  .diff .add{color:var(--ok)} .diff .del{color:var(--crit)} .diff .hd{color:var(--dim)}
+  .note{font-size:.82rem;color:var(--mid)}
+  .flag{border-left:2px solid var(--warn);padding:.6rem .9rem;background:#17140a;
+        font-size:.84rem;color:#f5deb0;margin-bottom:.5rem}
+  .flag.crit{border-left-color:var(--crit);background:#180d0d;color:#f6c9c9}
+  .cov{font-family:var(--mono);font-size:.73rem;color:var(--dim);
+       border-top:1px solid var(--line);padding-top:.6rem;margin-top:.8rem;
+       white-space:pre-line}
+  table{width:100%;border-collapse:collapse;font-size:.82rem}
+  th{text-align:left;font-family:var(--mono);font-size:.64rem;letter-spacing:.1em;
+     text-transform:uppercase;color:var(--dim);padding:.5rem .7rem;
+     border-bottom:1px solid var(--line)}
+  td{padding:.5rem .7rem;border-bottom:1px solid var(--line);color:var(--mid)}
+  td.id{font-family:var(--mono);color:var(--ink)}
+  .live{color:var(--ok);font-family:var(--mono);font-size:.7rem}
+  .hidden{display:none}
+  #status{font-size:.82rem;font-family:var(--mono)}
+  .s-ok{color:var(--ok)} .s-err{color:var(--crit)} .s-busy{color:var(--mid)}
+</style>
 </head>
-<body class="bg-gray-100 p-8">
-    <div x-data="routerConfig()" x-init="init()" class="max-w-5xl mx-auto bg-white p-6 rounded shadow">
-        <h1 class="text-2xl font-bold mb-1">Router Configuration</h1>
-        <p class="text-sm text-gray-500 mb-4">Editing tiers and models. The running router process must be restarted after saving for changes to take effect.</p>
+<body>
+<div class="wrap">
 
-        <div x-show="message"
-             x-transition
-             class="mb-4 p-3 rounded text-sm font-medium"
-             :class="messageType === 'error' ? 'bg-red-50 text-red-700 border border-red-200' : 'bg-green-50 text-green-700 border border-green-200'">
-            <span x-text="message"></span>
-            <button @click="message = ''" class="float-right font-bold">&times;</button>
-        </div>
+  <header>
+    <h1>smart-router</h1>
+    <span class="rev">running revision <b id="running">–</b></span>
+    <span class="rev" id="mismatch"></span>
+    <span style="flex:1"></span>
+    <span id="status"></span>
+  </header>
 
-        <div class="flex gap-1 border-b mb-6">
-            <template x-for="tab in ['tiers', 'models', 'stats']" :key="tab">
-                <button @click="setTab(tab)"
-                        class="px-4 py-2 text-sm font-bold capitalize border-b-2 -mb-px"
-                        :class="activeTab === tab ? 'border-blue-500 text-blue-600' : 'border-transparent text-gray-500 hover:text-gray-700'"
-                        x-text="tab"></button>
-            </template>
-        </div>
+  <section>
+    <h2>Where traffic went</h2>
+    <div class="grid" id="tiers"><div class="cell"><span class="k">loading</span></div></div>
+  </section>
 
-        <div x-show="activeTab === 'tiers'">
-            <h2 class="font-bold text-lg mb-2">Tiers</h2>
-            <div class="space-y-3 mb-6">
-                <template x-for="tier in config.tiers" :key="tier.name">
-                    <div class="border p-3 rounded bg-gray-50 flex items-center gap-4">
-                        <span class="font-mono font-bold w-28" x-text="tier.name"></span>
-                        <label class="flex items-center gap-2 text-sm">Threshold
-                            <input type="number" step="0.01" min="0" max="1" x-model.number="tier.min_score" class="border p-1 w-24">
-                        </label>
-                    </div>
-                </template>
-            </div>
-            <button @click="saveConfig" class="bg-blue-500 text-white px-4 py-2 rounded font-bold">Save Changes</button>
-        </div>
-
-        <div x-show="activeTab === 'models'">
-            <h2 class="font-bold text-lg mb-2">Models</h2>
-            <div class="overflow-x-auto mb-4">
-                <table class="w-full text-sm border-collapse">
-                    <thead>
-                        <tr class="text-left border-b bg-gray-50">
-                            <th class="p-2">ID</th>
-                            <th class="p-2">Provider</th>
-                            <th class="p-2">Tier</th>
-                            <th class="p-2">Cost / 1k</th>
-                            <th class="p-2">Context window</th>
-                            <th class="p-2 text-center">Vision</th>
-                            <th class="p-2 text-center">Tools</th>
-                            <th class="p-2 text-center">JSON</th>
-                            <th class="p-2"></th>
-                        </tr>
-                    </thead>
-                    <tbody>
-                        <template x-for="(model, index) in models" :key="index">
-                            <tr class="border-b">
-                                <td class="p-2"><input type="text" x-model="model.id" class="border p-1 w-40 font-mono"></td>
-                                <td class="p-2">
-                                    <select x-model="model.provider" class="border p-1">
-                                        <template x-for="name in providerNames" :key="name">
-                                            <option :value="name" x-text="name"></option>
-                                        </template>
-                                    </select>
-                                </td>
-                                <td class="p-2">
-                                    <select x-model="model.tier" class="border p-1">
-                                        <template x-for="name in tierNames" :key="name">
-                                            <option :value="name" x-text="name"></option>
-                                        </template>
-                                    </select>
-                                </td>
-                                <td class="p-2"><input type="number" step="0.0001" min="0" x-model.number="model.cost_per_1k" class="border p-1 w-24"></td>
-                                <td class="p-2"><input type="number" step="1" min="1" x-model.number="model.context_window" class="border p-1 w-28"></td>
-                                <td class="p-2 text-center"><input type="checkbox" x-model="model.vision"></td>
-                                <td class="p-2 text-center"><input type="checkbox" x-model="model.tools"></td>
-                                <td class="p-2 text-center"><input type="checkbox" x-model="model.json_mode"></td>
-                                <td class="p-2"><button @click="removeModel(index)" class="text-red-600 font-bold px-2">&#10005;</button></td>
-                            </tr>
-                        </template>
-                    </tbody>
-                </table>
-            </div>
-            <button @click="addModel" class="mb-6 bg-gray-200 hover:bg-gray-300 px-3 py-1.5 rounded text-sm font-bold">+ Add model</button>
-            <div>
-                <button @click="saveConfig" class="bg-blue-500 text-white px-4 py-2 rounded font-bold">Save Changes</button>
-            </div>
-        </div>
-
-        <div x-show="activeTab === 'stats'">
-            <div class="flex items-center justify-between mb-2">
-                <h2 class="font-bold text-lg">Decision log</h2>
-                <button @click="loadStats" class="text-sm text-blue-600 hover:underline" :disabled="statsLoading">
-                    <span x-text="statsLoading ? 'Refreshing…' : 'Refresh'"></span>
-                </button>
-            </div>
-
-            <template x-if="stats && stats.logging === 'disabled'">
-                <p class="text-sm text-gray-500">Logging is disabled in this config (<code class="font-mono">logging.enabled: false</code>) — nothing to show.</p>
-            </template>
-
-            <template x-if="stats && stats.logging !== 'disabled'">
-                <div class="space-y-6">
-                    <div class="grid grid-cols-2 md:grid-cols-4 gap-3">
-                        <div class="border rounded p-3 bg-gray-50">
-                            <div class="text-xs text-gray-500">Total decisions</div>
-                            <div class="text-2xl font-bold" x-text="stats.total"></div>
-                        </div>
-                        <div class="border rounded p-3 bg-gray-50">
-                            <div class="text-xs text-gray-500">Labeled</div>
-                            <div class="text-2xl font-bold" x-text="stats.labeled"></div>
-                        </div>
-                        <div class="border rounded p-3 bg-gray-50">
-                            <div class="text-xs text-gray-500">On-device</div>
-                            <div class="text-2xl font-bold" x-text="stats.savings.on_device_pct + '%'"></div>
-                        </div>
-                        <div class="border rounded p-3 bg-gray-50">
-                            <div class="text-xs text-gray-500">Observed spend</div>
-                            <div class="text-2xl font-bold">$<span x-text="stats.savings.total_cost"></span></div>
-                        </div>
-                    </div>
-
-                    <div>
-                        <h3 class="font-bold text-sm mb-2 text-gray-600">By tier</h3>
-                        <div class="space-y-2">
-                            <template x-for="tier in tierNames" :key="tier">
-                                <div class="flex items-center gap-3 text-sm">
-                                    <span class="font-mono w-24" x-text="tier"></span>
-                                    <div class="flex-1 bg-gray-100 rounded h-4 overflow-hidden">
-                                        <div class="bg-blue-400 h-4" :style="`width: ${tierPct(tier)}%`"></div>
-                                    </div>
-                                    <span class="w-16 text-right text-gray-600" x-text="(stats.by_tier[tier] || 0)"></span>
-                                </div>
-                            </template>
-                        </div>
-                    </div>
-
-                    <p class="text-xs text-gray-400">
-                        <span x-text="stats.savings.free"></span> of <span x-text="stats.savings.on_device"></span> on-device decisions cost $0.
-                        Labeled rows are what a head retrain (<code class="font-mono">train/train_head.py</code>) trains on.
-                    </p>
-                </div>
-            </template>
-
-            <p x-show="!stats && !statsLoading" class="text-sm text-gray-500">No stats loaded yet.</p>
-        </div>
+  <section>
+    <h2>Config</h2>
+    <textarea id="yaml" spellcheck="false" aria-label="Router configuration YAML"></textarea>
+    <div class="row" style="margin-top:.75rem">
+      <button id="preview">Preview changes</button>
+      <button id="apply" class="primary" disabled>Apply</button>
+      <button id="reset">Discard edits</button>
+      <span class="note" id="hint">Preview first — Apply stays disabled until you do.</span>
     </div>
+  </section>
 
-    <script>
-        function routerConfig() {
-            return {
-                config: { tiers: [], models: [], providers: {} },
-                models: [],
-                activeTab: 'tiers',
-                message: '',
-                messageType: 'success',
-                stats: null,
-                statsLoading: false,
-                async init() {
-                    const res = await fetch('/api/config');
-                    this.config = await res.json();
-                    this.models = (this.config.models || []).map((m, i) => ({
-                        orig_index: i,
-                        id: m.id,
-                        provider: m.provider,
-                        tier: m.tier,
-                        cost_per_1k: m.cost_per_1k ?? 0,
-                        context_window: m.context_window ?? 8192,
-                        vision: !!(m.capabilities && m.capabilities.vision),
-                        tools: !!(m.capabilities && m.capabilities.tools),
-                        json_mode: !!(m.capabilities && m.capabilities.json),
-                    }));
-                },
-                setTab(tab) {
-                    this.activeTab = tab;
-                    if (tab === 'stats' && !this.stats) this.loadStats();
-                },
-                async loadStats() {
-                    this.statsLoading = true;
-                    try {
-                        const res = await fetch('/api/stats');
-                        this.stats = await res.json();
-                        if (!res.ok) {
-                            this.message = this.stats.detail || 'Failed to load stats';
-                            this.messageType = 'error';
-                        }
-                    } finally {
-                        this.statsLoading = false;
-                    }
-                },
-                tierPct(tier) {
-                    if (!this.stats || !this.stats.total) return 0;
-                    return Math.round(100 * (this.stats.by_tier[tier] || 0) / this.stats.total);
-                },
-                get providerNames() {
-                    return Object.keys(this.config.providers || {});
-                },
-                get tierNames() {
-                    return (this.config.tiers || []).map(t => t.name);
-                },
-                addModel() {
-                    this.models.push({
-                        orig_index: null,
-                        id: '',
-                        provider: this.providerNames[0] || '',
-                        tier: this.tierNames[0] || '',
-                        cost_per_1k: 0,
-                        context_window: 8192,
-                        vision: false,
-                        tools: false,
-                        json_mode: false,
-                    });
-                },
-                removeModel(index) {
-                    this.models.splice(index, 1);
-                },
-                async saveConfig() {
-                    const tiers = this.config.tiers.map(t => ({name: t.name, min_score: t.min_score}));
-                    const models = this.models.map(m => ({
-                        id: m.id,
-                        provider: m.provider,
-                        tier: m.tier,
-                        cost_per_1k: Number(m.cost_per_1k),
-                        context_window: Number(m.context_window),
-                        vision: m.vision,
-                        tools: m.tools,
-                        json_mode: m.json_mode,
-                        orig_index: m.orig_index,
-                    }));
-                    const response = await fetch('/api/config', {
-                        method: 'POST',
-                        headers: {'Content-Type': 'application/json'},
-                        body: JSON.stringify({tiers, models})
-                    });
-                    const body = await response.json();
-                    if (response.ok) {
-                        this.message = `Saved. ${body.note}`;
-                        this.messageType = 'success';
-                        await this.init();
-                    } else {
-                        this.message = `Error saving: ${body.detail || response.statusText}`;
-                        this.messageType = 'error';
-                    }
-                }
-            }
-        }
-    </script>
+  <section id="result" class="hidden">
+    <h2>What this would do</h2>
+    <div id="flags"></div>
+    <div id="summary"></div>
+    <div id="diffwrap" style="margin-top:1rem"></div>
+  </section>
+
+  <section>
+    <h2>History</h2>
+    <table><thead><tr><th>#</th><th>When</th><th>Note</th><th></th></tr></thead>
+      <tbody id="history"></tbody></table>
+  </section>
+</div>
+
+<script>
+// The admin token never appears here. Caddy injects Authorization on the way
+// through, so Cloudflare Access SSO is the first gate and the token is the
+// second -- and a browser that is compromised never had a credential to leak.
+const $ = id => document.getElementById(id);
+let baseYaml = "", previewed = null;
+
+function status(msg, cls){ const s=$("status"); s.textContent=msg; s.className=cls||""; }
+
+async function api(path, opts){
+  const r = await fetch(path, Object.assign({headers:{"Content-Type":"application/json"}}, opts||{}));
+  const body = await r.json().catch(()=>({}));
+  if(!r.ok){ const d=body.detail; throw new Error(typeof d==="string"?d:JSON.stringify(d)); }
+  return body;
+}
+
+function tierCells(byTier, total){
+  const el=$("tiers"); el.innerHTML="";
+  const entries = Object.entries(byTier||{});
+  if(!entries.length){ el.innerHTML='<div class="cell"><span class="k">no decisions logged</span></div>'; return; }
+  for(const [tier,n] of entries.sort((a,b)=>b[1]-a[1])){
+    const pct = total ? Math.round(n*100/total) : 0;
+    el.insertAdjacentHTML("beforeend",
+      `<div class="cell"><span class="k">${tier}</span><span class="v">${pct}%</span>
+       <span class="k" style="letter-spacing:0;text-transform:none">${n.toLocaleString()} requests</span></div>`);
+  }
+}
+
+function renderDiff(lines){
+  if(!lines || !lines.length) return '<p class="note">No textual change.</p>';
+  return '<pre class="diff">' + lines.map(l=>{
+    const e = l.replace(/[&<>]/g, c=>({"&":"&amp;","<":"&lt;",">":"&gt;"}[c]));
+    if(l.startsWith("+++")||l.startsWith("---")||l.startsWith("@@")) return `<span class="hd">${e}</span>`;
+    if(l.startsWith("+")) return `<span class="add">${e}</span>`;
+    if(l.startsWith("-")) return `<span class="del">${e}</span>`;
+    return e;
+  }).join("\n") + '</pre>';
+}
+
+function renderSummary(replay){
+  const c = replay.coverage, moves = replay.moves || {};
+  const keys = Object.keys(moves);
+  let html = "";
+  if(!c.replayed){
+    // A bare "nothing would change" is indistinguishable from "this is safe".
+    html += `<div class="flag crit">Replayed <b>0</b> decisions, so this preview
+             says nothing about the change. ${c.reason || ""}</div>`;
+  } else if(!keys.length){
+    html += `<p class="note">No request would change tier.</p>`;
+  } else {
+    html += '<pre>' + keys.map(k=>`${String(moves[k]).padStart(6)}  ${k}`).join("\n") + '</pre>';
+  }
+  const e = replay.estimates;
+  if(e){
+    const bits=[];
+    if("cost_delta" in e) bits.push(`cost ${e.cost_delta>=0?"+":""}$${e.cost_delta.toFixed(4)} across ${e.priced_rows} requests`);
+    if("latency_delta_ms_per_request" in e){
+      const s=(e.latency_delta_ms_per_request/1000).toFixed(2);
+      bits.push(`latency ${s>=0?"+":""}${s}s per request`);
+    }
+    html += `<p class="note" style="margin-top:.6rem">Estimated: ${bits.join(" · ")}<br>
+             <span style="color:var(--dim)">${e.basis}</span></p>`;
+  }
+  html += `<div class="cov">replayed ${c.replayed} of ${c.total} logged decisions
+${c.excluded_override||0} excluded: carried force_tier or the sensitive pin, so never consulted a threshold
+${c.excluded_no_receipt||0} excluded: logged before decisions recorded why they were made</div>`;
+  return html;
+}
+
+async function refresh(){
+  const [cfg, health, stats, hist] = await Promise.all([
+    api("/admin/api/config"), api("/health"),
+    api("/stats").catch(()=>({})), api("/admin/api/revisions")
+  ]);
+  $("running").textContent = health.revision ?? "none";
+  const drift = cfg.active_revision != null && cfg.active_revision !== health.revision;
+  $("mismatch").innerHTML = drift
+    ? `<span style="color:var(--crit)">· database says ${cfg.active_revision} — restart to reconcile</span>` : "";
+  const total = Object.values(stats.by_tier||{}).reduce((a,b)=>a+b,0);
+  tierCells(stats.by_tier, total);
+  baseYaml = cfg.yaml || "";
+  $("yaml").value = baseYaml;
+  $("history").innerHTML = (hist.revisions||[]).map(r=>`
+    <tr><td class="id">${r.id}</td>
+        <td>${new Date(r.created_at*1000).toLocaleString()}</td>
+        <td>${(r.note||"").replace(/[<>]/g,"")}</td>
+        <td>${r.active?'<span class="live">live</span>'
+                      :`<button data-revert="${r.id}">Revert</button>`}</td></tr>`).join("");
+}
+
+$("preview").onclick = async () => {
+  status("replaying…","s-busy"); $("apply").disabled = true;
+  try{
+    previewed = $("yaml").value;
+    const out = await api("/admin/api/preview",{method:"POST",
+      body:JSON.stringify({yaml:previewed})});
+    $("flags").innerHTML = (out.capability_regressions||[]).map(g=>
+      `<div class="flag">${g}</div>`).join("");
+    $("summary").innerHTML = renderSummary(out.replay);
+    $("diffwrap").innerHTML = renderDiff(out.diff);
+    $("result").classList.remove("hidden");
+    $("apply").disabled = false;
+    $("hint").textContent = "Reviewed. Apply puts this into force immediately.";
+    status("previewed","s-ok");
+  }catch(e){ status(e.message,"s-err"); }
+};
+
+$("apply").onclick = async () => {
+  if($("yaml").value !== previewed){
+    status("edited since preview — preview again","s-err");
+    $("apply").disabled = true; return;
+  }
+  status("applying…","s-busy");
+  try{
+    const out = await api("/admin/api/apply",{method:"POST",
+      body:JSON.stringify({yaml:previewed, author:"ui"})});
+    status(`applied revision ${out.revision}`,"s-ok");
+    $("result").classList.add("hidden"); $("apply").disabled = true;
+    await refresh();
+  }catch(e){ status(e.message,"s-err"); }
+};
+
+$("reset").onclick = () => {
+  $("yaml").value = baseYaml; $("apply").disabled = true;
+  $("result").classList.add("hidden"); status("");
+};
+
+$("history").onclick = async ev => {
+  const id = ev.target.dataset && ev.target.dataset.revert;
+  if(!id) return;
+  status(`reverting to ${id}…`,"s-busy");
+  try{ await api(`/admin/api/revert/${id}`,{method:"POST"});
+       status(`reverted to ${id}`,"s-ok"); await refresh(); }
+  catch(e){ status(e.message,"s-err"); }
+};
+
+$("yaml").addEventListener("input", ()=>{
+  if($("yaml").value !== previewed){ $("apply").disabled = true; }
+});
+
+refresh().catch(e=>status(e.message,"s-err"));
+</script>
 </body>
 </html>

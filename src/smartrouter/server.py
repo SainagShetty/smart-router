@@ -312,6 +312,13 @@ def create_app(
         except Exception as exc:
             raise HTTPException(status_code=400, detail=f"invalid config: {exc}")
 
+    @app.get("/admin/", dependencies=ADMIN)
+    @app.get("/admin", dependencies=ADMIN)
+    def admin_index():
+        from fastapi.responses import FileResponse
+        from pathlib import Path as _P
+        return FileResponse(str(_P(__file__).parent / "ui" / "index.html"))
+
     @app.get("/admin/api/config", dependencies=ADMIN)
     def admin_get_config():
         active = core.store.active_revision() if core.store else None
