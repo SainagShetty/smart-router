@@ -18,7 +18,20 @@ models:
   - id: "gemma3n:e4b"
     provider: ollama
     tier: local
-    context_window: 8192
+    # 4096, not the model's architectural 32768: Ollama allocates num_ctx, and it
+    # defaults to 4096 regardless of what the model supports. Declaring more than
+    # Ollama serves means the gate admits prompts that then get silently
+    # truncated — gemma would answer on a clipped conversation with nothing
+    # surfacing the loss. (Measured 2026-07-31: nothing had actually overflowed
+    # yet, so this was latent rather than live.)
+    #
+    # Raising it was measured and rejected. Allocating 32768 is nearly free
+    # (+0.8GB, no latency change, stays 100% GPU), but *using* long context is
+    # not: prefill runs ~6.25 ms/token on the M4, so a 10k-token transcript costs
+    # ~65s against ~1-4s in the cloud. Of the deep-turn traffic that would have
+    # become local-eligible, 68% would have taken over 30s — to save ~$0.30.
+    # Local stays for short prompts, where it is genuinely fast (~0.4s generation).
+    context_window: 4096
     # vision:false so image requests gate straight to the cloud vision models.
     # (Ollama's OpenAI endpoint won't fetch image URLs; it needs base64. Flip to
     # true only if your callers send base64 image data.)
