@@ -47,6 +47,30 @@ CREATE TABLE IF NOT EXISTS decisions (
 );
 CREATE INDEX IF NOT EXISTS idx_decisions_label ON decisions(label);
 CREATE INDEX IF NOT EXISTS idx_decisions_embmodel ON decisions(embedding_model_id);
+
+-- Routing config, versioned.
+--
+-- The config used to live in examples/router.yaml -- a git-tracked file that a
+-- pull or a tidy-up could silently revert under a running fleet. Here it is
+-- append-only history instead: every change is a row, nothing is ever edited or
+-- deleted, and `active` names the one in force. That makes the audit trail and
+-- the revert mechanism the same object rather than two.
+--
+-- The router does NOT read this table at boot. The active revision renders to a
+-- YAML file with its id stamped in, and the server loads that. Keeping the
+-- database off the boot path means a locked or corrupt db -- the nightly backup
+-- runs sqlite3 .backup against this exact file at 03:30 -- can never stop the
+-- gateway starting.
+CREATE TABLE IF NOT EXISTS config_revisions (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    created_at REAL NOT NULL,
+    author     TEXT,
+    note       TEXT,
+    yaml       TEXT NOT NULL,
+    active     INTEGER NOT NULL DEFAULT 0
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_config_one_active
+    ON config_revisions(active) WHERE active = 1;
 """
 
 # Columns added after v1 shipped; applied via ALTER TABLE so existing DBs migrate
@@ -281,6 +305,85 @@ class TrainingStore:
             rows = self._conn.execute(q).fetchall()
         keys = ("prompt", "response", "label", "tier", "model", "source", "sensitive")
         return [dict(zip(keys, r)) for r in rows]
+
+    # ---- config revisions -------------------------------------------------
+    #
+    #   add_revision(yaml) ──▶ row, active=0        history, not yet in force
+    #                              │
+    #                       activate(id)            exactly one row may hold
+    #                              │                active=1, enforced by a
+    #                              ▼                partial unique index
+    #                        active_revision()
+    #
+    # Nothing here renders or reloads. Ordering that correctly -- render, then
+    # reload, then activate -- is the caller's job, and it matters: the router
+    # boots from the rendered file, so this table may lag what is running but
+    # must never lead it. See server.apply_revision.
+
+    def add_revision(self, yaml_text: str, author: str = None,
+                     note: str = None) -> int:
+        """Append a revision. Never active on creation -- activate() does that."""
+        with self._lock:
+            cur = self._conn.execute(
+                "INSERT INTO config_revisions (created_at, author, note, yaml, active) "
+                "VALUES (?,?,?,?,0)",
+                (time.time(), author, note, yaml_text),
+            )
+            self._conn.commit()
+            return cur.lastrowid
+
+    def activate_revision(self, revision_id: int) -> bool:
+        """Make one revision active, clearing any other. Returns False if unknown.
+
+        Both statements run under one transaction: a half-applied activation
+        would leave zero active rows, and the next boot would have nothing to
+        render.
+        """
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT 1 FROM config_revisions WHERE id=?", (revision_id,)
+            ).fetchone()
+            if row is None:
+                return False
+            self._conn.execute("UPDATE config_revisions SET active=0 WHERE active=1")
+            self._conn.execute(
+                "UPDATE config_revisions SET active=1 WHERE id=?", (revision_id,)
+            )
+            self._conn.commit()
+            return True
+
+    def active_revision(self) -> Optional[Dict[str, Any]]:
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT id, created_at, author, note, yaml FROM config_revisions "
+                "WHERE active=1"
+            ).fetchone()
+        if row is None:
+            return None
+        return {"id": row[0], "created_at": row[1], "author": row[2],
+                "note": row[3], "yaml": row[4]}
+
+    def revisions(self, limit: int = 50) -> List[Dict[str, Any]]:
+        """Newest first. Omits `yaml` -- callers listing history do not need it,
+        and a config is large enough that returning 50 of them is wasteful."""
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT id, created_at, author, note, active FROM config_revisions "
+                "ORDER BY id DESC LIMIT ?", (limit,)
+            ).fetchall()
+        return [{"id": r[0], "created_at": r[1], "author": r[2],
+                 "note": r[3], "active": bool(r[4])} for r in rows]
+
+    def revision(self, revision_id: int) -> Optional[Dict[str, Any]]:
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT id, created_at, author, note, yaml, active FROM "
+                "config_revisions WHERE id=?", (revision_id,)
+            ).fetchone()
+        if row is None:
+            return None
+        return {"id": row[0], "created_at": row[1], "author": row[2],
+                "note": row[3], "yaml": row[4], "active": bool(row[5])}
 
     def close(self) -> None:
         with self._lock:
