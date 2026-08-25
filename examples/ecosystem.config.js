@@ -14,7 +14,10 @@ module.exports = {
       // absolute path to the venv console script so PM2 doesn't need an
       // activated shell; adjust if your venv lives elsewhere.
       script: "/Users/sainagshetty/Development/smart-router/.venv/bin/smartrouter",
-      args: "serve --config ./examples/router.yaml --host 127.0.0.1 --port 4000",
+      // No --config: it would override SMARTROUTER_CONFIG below, which is
+      // what points at the rendered revision. A flag here silently winning
+      // over the env is how the router kept booting the git-tracked example.
+      args: "serve --host 127.0.0.1 --port 4000",
       interpreter: "none", // smartrouter is a console script, not a .js file
       cwd: "/Users/sainagshetty/Development/smart-router",
       env: {

@@ -173,11 +173,17 @@ def _serve(args):
 
     from .server import create_app, trust_loopback_from_env
 
+    # The PATH matters here, not just the parsed config: /admin renders the
+    # active revision back to this exact file, so serve() must know where it
+    # came from. Without it the admin API can read but never apply.
+    config_path = _resolve_config_path(args.config)
     config = _resolve_config(args.config)
     app = create_app(
         config,
         api_key=os.environ.get("SMARTROUTER_API_KEY"),
         trust_loopback=trust_loopback_from_env(),
+        config_path=config_path,
+        admin_token=os.environ.get("SMARTROUTER_ADMIN_TOKEN"),
     )
     uvicorn.run(app, host=args.host, port=args.port, log_level=args.log_level)
 

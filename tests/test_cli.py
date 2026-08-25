@@ -96,7 +96,13 @@ def test_config_resolution_env(tmp_path, capsys, monkeypatch):
 
 
 def test_missing_config_exits(tmp_path, monkeypatch):
+    # HOME must be isolated too: _resolve_config_path falls back to
+    # ~/.config/smartrouter/router.yaml, so on a machine that actually runs
+    # smartrouter this test would find the developer's real config and pass for
+    # the wrong reason -- or, once that file exists, fail. Depending on the
+    # absence of a file in someone's home directory is not a test.
     monkeypatch.delenv("SMARTROUTER_CONFIG", raising=False)
+    monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.chdir(tmp_path)
     with pytest.raises(SystemExit):
         cli.main(["route", "hi"])
