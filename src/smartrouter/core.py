@@ -47,16 +47,58 @@ class Decision:
     cascade: bool = field(default=False, repr=False)
 
 
+@dataclass(frozen=True)
+class _Live:
+    """A config and the providers built from it, as one indivisible unit.
+
+    The config can be swapped at runtime (see RouterCore.reload), and that makes
+    reading it in two steps a bug:
+
+        route()     reads config     ──┐  two independent attribute reads.
+        complete()  reads providers  ──┘  A reload landing between them routes
+                                          a request against config A and then
+                                          executes it against config B's
+                                          providers -- remove a model while a
+                                          request is in flight and the lookup
+                                          KeyErrors into a 500.
+
+    Binding both from a SINGLE read makes the torn state unrepresentable rather
+    than merely unlikely. Every public entry point snapshots `self._live` once
+    and passes it down; nothing reads it twice.
+    """
+
+    config: RouterConfig
+    providers: Dict[str, Any]
+
+
 class RouterCore:
     def __init__(self, config: RouterConfig):
-        self.config = config
+        # The classifier and the store deliberately live OUTSIDE _Live: they are
+        # expensive (a joblib load) and stateful (an open SQLite connection)
+        # respectively, and reload keeps both. See reload() for why.
         self.classifier = build_classifier(config.classifier)
-        self.providers = {
-            name: build_provider(name, pc) for name, pc in config.providers.items()
-        }
+        self._live = _Live(config, self._build_providers(config))
         self.store: Optional[TrainingStore] = None
         if config.logging.enabled:
             self.store = TrainingStore(config.logging.db_path)
+
+    @staticmethod
+    def _build_providers(config: RouterConfig) -> Dict[str, Any]:
+        return {name: build_provider(name, pc)
+                for name, pc in config.providers.items()}
+
+    # `config` and `providers` stay readable as attributes: callers and tests
+    # reach for them freely (test stubs mutate core.providers in place). They
+    # are now views onto the frozen pair, so a reader always sees a consistent
+    # snapshot -- but internal code must still bind _live ONCE per request
+    # rather than going through these.
+    @property
+    def config(self) -> RouterConfig:
+        return self._live.config
+
+    @property
+    def providers(self) -> Dict[str, Any]:
+        return self._live.providers
 
     # ---- decision ---------------------------------------------------------
 
@@ -73,17 +115,22 @@ class RouterCore:
         log_raw: Optional[bool] = None,
         source: Optional[str] = None,
         sensitive: bool = False,
+        _live: Optional[_Live] = None,
     ) -> Decision:
+        # Callers that also need providers (complete, stream) snapshot _live
+        # themselves and pass it in, so the whole request is served by one
+        # consistent pair. A bare route() call takes its own snapshot.
+        live = _live if _live is not None else self._live
         feats = features_mod.extract(
             messages, tools=tools, response_format=response_format
         )
-        gate = capabilities.gate(self.config.models, feats)
+        gate = capabilities.gate(live.config.models, feats)
 
         score, embedding = self._score(feats)
 
-        cascade = self.config.policy.cascade if cascade is None else cascade
+        cascade = live.config.policy.cascade if cascade is None else cascade
         result = decide(
-            self.config,
+            live.config,
             gate.candidates,
             score,
             Overrides(force_tier=force_tier, cheap_only=cheap_only,
@@ -105,7 +152,7 @@ class RouterCore:
             model_spec=result.model,
             fallback_specs=result.fallback,
             embedding=embedding,
-            log_raw=self.config.logging.log_raw if log_raw is None else log_raw,
+            log_raw=live.config.logging.log_raw if log_raw is None else log_raw,
             cascade=cascade,
         )
         self._record(decision, feats, source=source, sensitive=sensitive)
@@ -163,10 +210,12 @@ class RouterCore:
         sensitive: bool = False,
         **params,
     ) -> Tuple[Dict[str, Any], Decision]:
+        live = self._live
         decision = self.route(
             messages, tools=tools, response_format=response_format,
             force_tier=force_tier, cheap_only=cheap_only, local_only=local_only,
             cascade=cascade, log_raw=log_raw, source=source, sensitive=sensitive,
+            _live=live,
         )
         chain = [decision.model_spec] + list(decision.fallback_specs)
         if tools is not None:
@@ -176,7 +225,7 @@ class RouterCore:
 
         last_err: Optional[Exception] = None
         for i, spec in enumerate(chain):
-            provider = self.providers[spec.provider]
+            provider = live.providers[spec.provider]
             call_params = dict(spec.params)
             call_params.update(params)
             t0 = time.time()
@@ -245,10 +294,11 @@ class RouterCore:
     ) -> Tuple[Iterator[Dict[str, Any]], Decision]:
         """Return (chunk-iterator, Decision). Falls back if a provider errors
         before the first chunk."""
+        live = self._live
         decision = self.route(
             messages, tools=tools, response_format=response_format,
             force_tier=force_tier, cheap_only=cheap_only, local_only=local_only,
-            log_raw=log_raw, source=source, sensitive=sensitive,
+            log_raw=log_raw, source=source, sensitive=sensitive, _live=live,
         )
         chain = [decision.model_spec] + list(decision.fallback_specs)
         if tools is not None:
@@ -259,7 +309,7 @@ class RouterCore:
         t0 = time.time()
         last_err: Optional[Exception] = None
         for spec in chain:
-            provider = self.providers[spec.provider]
+            provider = live.providers[spec.provider]
             call_params = dict(spec.params)
             call_params.update(params)
             gen = provider.stream(spec.id, list(messages), **call_params)
