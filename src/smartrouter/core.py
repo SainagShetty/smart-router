@@ -127,14 +127,27 @@ class RouterCore:
         either sees the whole old config or the whole new one -- never a mix.
         In-flight requests finish against the snapshot they already took.
         """
+        self.check_reloadable(new_config)
         live = self._live
+        self._live = _Live(new_config, live.providers)
+
+    def check_reloadable(self, new_config: RouterConfig) -> None:
+        """Raise if `new_config` could not be hot-applied. Changes nothing.
+
+        Separate from reload() on purpose. A caller wanting to know "would this
+        work" must not find out by DOING it: apply() renders to disk before
+        reloading, and an earlier draft used a reload as its dry run -- which
+        succeeded, swapped the live config, and then left the router serving an
+        un-rendered, uncommitted candidate when the render failed. Asking is not
+        the same as doing.
+        """
+        live_config = self._live.config
         for section in ("providers", "logging", "classifier"):
-            if getattr(new_config, section) != getattr(live.config, section):
+            if getattr(new_config, section) != getattr(live_config, section):
                 raise ConfigNotHotReloadable(
                     f"`{section}` changed; that cannot be applied to a running "
                     "process. Save the revision and restart smart-router."
                 )
-        self._live = _Live(new_config, live.providers)
 
     # ---- replay -----------------------------------------------------------
 

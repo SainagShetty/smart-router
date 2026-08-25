@@ -38,9 +38,10 @@ from typing import Any, Dict, List, Optional
 from pydantic import BaseModel, Field
 
 from . import __version__
-from .config import RouterConfig
+from .config import (RouterConfig, capability_regressions, render_revision,
+                     write_rendered)
 from .core import RouterCore
-from .errors import NoEligibleModel, ProviderError
+from .errors import ConfigNotHotReloadable, NoEligibleModel, ProviderError
 
 # Imported at module scope on purpose: `from __future__ import annotations` makes
 # every annotation a string, and FastAPI resolves the `request: Request` hint in
@@ -92,6 +93,13 @@ class RouteRequest(BaseModel):
     sensitive: bool = False
 
 
+class ConfigCandidate(BaseModel):
+    yaml: str
+    author: Optional[str] = None
+    note: Optional[str] = None
+    replay_limit: int = 1000
+
+
 class FeedbackRequest(BaseModel):
     decision_id: str
     label: int
@@ -116,6 +124,8 @@ def create_app(
     config: RouterConfig,
     api_key: Optional[str] = None,
     trust_loopback: bool = True,
+    config_path: Optional[str] = None,
+    admin_token: Optional[str] = None,
 ):
     try:
         from fastapi import Depends, FastAPI, Header, HTTPException
@@ -179,8 +189,13 @@ def create_app(
         return {
             "status": "ok",
             "version": __version__,
-            "tiers": config.tier_order(),
-            "models": [m.id for m in config.models],
+            # core.config, not the closure variable: the config can be
+            # swapped at runtime, and a /health that reports the config this
+            # process STARTED with rather than the one it is serving is worse
+            # than no /health at all.
+            "tiers": core.config.tier_order(),
+            "models": [m.id for m in core.config.models],
+            "revision": core.config.revision,
         }
 
     @app.post("/route", dependencies=[Depends(require_auth)])
@@ -232,14 +247,184 @@ def create_app(
     def stats():
         if not core.store:
             return {"logging": "disabled"}
-        local_providers = {n for n, p in config.providers.items() if p.is_local()}
-        local_models = {m.id for m in config.models if m.provider in local_providers}
+        live = core.config          # not the closure variable -- see /health
+        local_providers = {n for n, p in live.providers.items() if p.is_local()}
+        local_models = {m.id for m in live.models if m.provider in local_providers}
         return {
             "total": core.store.count(),
             "labeled": core.store.count(labeled_only=True),
             "by_tier": core.store.tier_counts(),
             "savings": core.store.savings_summary(local_models=local_models),
         }
+
+    # ---- admin ------------------------------------------------------------
+    #
+    # A SECOND auth tier, deliberately not the one above.
+    #
+    # require_auth exempts loopback callers, and that is right for /v1/*: ten
+    # co-located services depend on it, and a token in front of them protects
+    # nothing they could not already read out of this process's environment.
+    #
+    # It is wrong here. These endpoints rewrite where every LLM call in the
+    # fleet goes. Under require_auth, any process on this box -- including an
+    # SSRF in any of the ten, one of which is a 3,000-package Node app on the
+    # public internet -- could repoint the router with no credential at all.
+    # Reading is not writing, so they do not share a gate.
+    #
+    # The browser never holds this token: Caddy injects it on the way through,
+    # so Cloudflare Access SSO is the first gate and the token is the second.
+    # An on-box forger has neither.
+
+    def require_admin(authorization: Optional[str] = Header(default=None)):
+        if not admin_token:
+            raise HTTPException(
+                status_code=503,
+                detail="admin API is disabled: set SMARTROUTER_ADMIN_TOKEN",
+            )
+        if authorization != f"Bearer {admin_token}":
+            raise HTTPException(
+                status_code=401, detail="invalid or missing admin token"
+            )
+
+    ADMIN = [Depends(require_admin)]
+
+    def _candidate(yaml_text: str) -> RouterConfig:
+        """Parse and validate a candidate config, or 400 with the reason."""
+        import yaml as _yaml
+        try:
+            data = _yaml.safe_load(yaml_text)
+        except Exception as exc:
+            raise HTTPException(status_code=400, detail=f"not valid YAML: {exc}")
+        if not isinstance(data, dict):
+            raise HTTPException(status_code=400, detail="config must be a mapping")
+        for name, prov in (data.get("providers") or {}).items():
+            if isinstance(prov, dict) and prov.get("api_key"):
+                # A literal key here would be written to the revision table --
+                # which is gzipped into ~/Backups nightly and kept 14 days.
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"provider {name!r} carries a literal api_key; use "
+                           "api_key_env so the credential stays out of the "
+                           "revision history",
+                )
+        try:
+            return RouterConfig.from_dict(data)
+        except Exception as exc:
+            raise HTTPException(status_code=400, detail=f"invalid config: {exc}")
+
+    @app.get("/admin/api/config", dependencies=ADMIN)
+    def admin_get_config():
+        active = core.store.active_revision() if core.store else None
+        return {
+            "running_revision": core.config.revision,
+            "active_revision": active["id"] if active else None,
+            "yaml": active["yaml"] if active else None,
+            "config": core.config.model_dump(mode="json"),
+        }
+
+    @app.get("/admin/api/revisions", dependencies=ADMIN)
+    def admin_revisions(limit: int = 50):
+        if not core.store:
+            return {"revisions": [], "note": "logging is disabled"}
+        return {"revisions": core.store.revisions(limit=limit),
+                "running_revision": core.config.revision}
+
+    @app.post("/admin/api/preview", dependencies=ADMIN)
+    def admin_preview(req: ConfigCandidate):
+        """What this candidate would do -- without doing any of it."""
+        candidate = _candidate(req.yaml)
+        active = core.store.active_revision() if core.store else None
+        current_yaml = active["yaml"] if active else None
+        diff = []
+        if current_yaml is not None:
+            import difflib
+            diff = list(difflib.unified_diff(
+                current_yaml.splitlines(), req.yaml.splitlines(),
+                fromfile=f"revision {active['id']}", tofile="candidate",
+                lineterm="", n=3))
+        return {
+            "diff": diff,
+            "capability_regressions": capability_regressions(core.config, candidate),
+            "replay": core.replay(candidate, limit=req.replay_limit),
+        }
+
+    @app.post("/admin/api/apply", dependencies=ADMIN)
+    def admin_apply(req: ConfigCandidate):
+        """Put a candidate into force.
+
+            validate ──▶ render ──▶ reload ──▶ commit
+                             │         │          │
+                         fails: nothing changed at all
+                                       │          │
+                                   fails: re-render the previous revision
+                                          and reload it back
+                                                  │
+                                              fails: file and router lead the
+                                              DB by one, which /health reports
+
+        The order is the design. The router boots from the RENDERED FILE, so
+        that file is the record of what runs -- changing it first means the
+        database can only ever LAG the running router, never lead it. A lagging
+        database is visible and harmless; a leading one is a UI that shows you a
+        config which was never applied, and this repo has already lost days to a
+        setting believed live that was not.
+        """
+        if not core.store:
+            raise HTTPException(status_code=503,
+                                detail="logging is disabled; revisions need it")
+        if not config_path:
+            raise HTTPException(status_code=503,
+                                detail="no config_path; cannot render")
+
+        candidate = _candidate(req.yaml)
+        try:
+            # ASK, do not do. An earlier draft called reload() here as its dry
+            # run; a successful reload is not dry -- it swaps the live config,
+            # so a later render failure left the router serving an un-rendered,
+            # uncommitted candidate reporting revision: null.
+            core.check_reloadable(candidate)
+        except ConfigNotHotReloadable as exc:
+            rid = core.store.add_revision(req.yaml, author=req.author, note=req.note)
+            raise HTTPException(
+                status_code=409,
+                detail={"error": str(exc), "saved_revision": rid,
+                        "note": "saved as history; restart smart-router to apply"},
+            )
+
+        previous_yaml = None
+        active = core.store.active_revision()
+        if active:
+            previous_yaml = active["yaml"]
+
+        revision_id = core.store.add_revision(req.yaml, author=req.author,
+                                              note=req.note)
+        try:
+            write_rendered(config_path, render_revision(req.yaml, revision_id))
+        except OSError as exc:
+            raise HTTPException(status_code=500,
+                                detail=f"could not write {config_path}: {exc}")
+        try:
+            core.reload(RouterConfig.from_yaml(config_path))
+        except Exception as exc:
+            if previous_yaml is not None and active:
+                write_rendered(config_path,
+                               render_revision(previous_yaml, active["id"]))
+                core.reload(RouterConfig.from_yaml(config_path))
+            raise HTTPException(status_code=500,
+                                detail=f"reload failed, previous config restored: {exc}")
+        core.store.activate_revision(revision_id)
+        return {"revision": revision_id, "running_revision": core.config.revision}
+
+    @app.post("/admin/api/revert/{revision_id}", dependencies=ADMIN)
+    def admin_revert(revision_id: int):
+        if not core.store:
+            raise HTTPException(status_code=503, detail="logging is disabled")
+        row = core.store.revision(revision_id)
+        if row is None:
+            raise HTTPException(status_code=404, detail="unknown revision")
+        return admin_apply(ConfigCandidate(
+            yaml=row["yaml"], author="revert",
+            note=f"revert to revision {revision_id}"))
 
     return app
 
@@ -251,6 +436,8 @@ def _app_from_env():
         config,
         api_key=os.environ.get("SMARTROUTER_API_KEY"),
         trust_loopback=trust_loopback_from_env(),
+        config_path=path,
+        admin_token=os.environ.get("SMARTROUTER_ADMIN_TOKEN"),
     )
 
 

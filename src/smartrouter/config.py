@@ -211,6 +211,51 @@ class RouterConfig(BaseModel):
             return cls.from_dict(yaml.safe_load(fh))
 
 
+def capability_gaps(config: "RouterConfig") -> List[str]:
+    """Capabilities no model in a tier can serve.
+
+    A tier with no tool-capable model does not fail at save time -- it fails
+    later, as a 422 on the request that needed tools, from a service that has
+    no idea the config changed. That exact shape cost four days once:
+    jarvis-finance-auditor 422'd on agentic Q&A from 2026-08-09 until
+    2026-08-13 because a blanket `sensitive` tag pinned tool-use requests to a
+    local tier with no tool support.
+
+    Reported per tier rather than raised, and deliberately NOT an error on its
+    own. The live config has three of these -- the local tier serves no vision,
+    tools or JSON -- and every one is intentional: gemma is marked vision:false
+    precisely so images gate to a cloud model that can actually fetch them. A
+    guard that refuses the correct config is a guard that gets turned off.
+
+    What is worth blocking is a REGRESSION: a gap this change introduces.
+    See capability_regressions.
+    """
+    gaps: List[str] = []
+    for tier in config.tiers:
+        models = [m for m in config.models if m.tier == tier.name]
+        if not models:
+            gaps.append(f"tier {tier.name!r} has no models at all")
+            continue
+        for cap, label in (("vision", "vision"), ("tools", "tool calling"),
+                           ("json_mode", "JSON mode")):
+            if not any(getattr(m.capabilities, cap) for m in models):
+                gaps.append(
+                    f"tier {tier.name!r} has no model supporting {label}"
+                )
+    return gaps
+
+
+def capability_regressions(active: "RouterConfig",
+                           candidate: "RouterConfig") -> List[str]:
+    """Capability gaps the candidate would INTRODUCE.
+
+    Existing gaps are usually deliberate; new ones almost never are. Comparing
+    against what is already live is what makes this signal instead of noise.
+    """
+    before = set(capability_gaps(active))
+    return sorted(set(capability_gaps(candidate)) - before)
+
+
 def render_revision(yaml_text: str, revision_id: int) -> str:
     """Stamp a revision id into a config, ready to be written to disk.
 
