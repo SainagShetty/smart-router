@@ -7,6 +7,7 @@ cost/latency, and captures implicit labels. The drop-in client builds on this.
 from __future__ import annotations
 
 import json
+import statistics
 import time
 import uuid
 from dataclasses import dataclass, field
@@ -134,6 +135,128 @@ class RouterCore:
                     "process. Save the revision and restart smart-router."
                 )
         self._live = _Live(new_config, live.providers)
+
+    # ---- replay -----------------------------------------------------------
+
+    def replay(self, candidate: RouterConfig, limit: int = 1000) -> Dict[str, Any]:
+        """Score a candidate config against traffic that actually happened.
+
+        Answers "what would this change have done" before it is applied, which
+        turns adjusting a threshold from a guess into an observation.
+
+            stored score ──▶ gate(candidate.models, stored features)
+                        └──▶ decide(candidate, ...)  ──▶ would-be tier
+                                                            │
+                             recorded tier ◀────────────────┘ compare
+
+        No provider is called and no embedding is read. The stored score is
+        already the classifier's verdict on that prompt, so a *config* replay
+        only needs to re-ask the threshold question -- re-scoring would only be
+        necessary to evaluate a different classifier.
+
+        Cost and latency deltas are ESTIMATES and labelled as such: we know what
+        each request actually cost in the tier it went to, so a request moving
+        local -> cheap is priced at the median observed cost of the cheap tier.
+        That is an average standing in for a specific prompt. Tier movements, by
+        contrast, are exact.
+
+        The returned `coverage` is not optional decoration. A preview reporting
+        "0 would change" without saying how many it looked at is
+        indistinguishable from "this change is safe", and most of this log
+        cannot be replayed at all -- see TrainingStore.replay_corpus.
+        """
+        if self.store is None:
+            return {"coverage": {"replayed": 0, "eligible": 0, "total": 0,
+                                 "excluded_override": 0, "excluded_no_receipt": 0,
+                                 "reason": "logging is disabled; nothing to replay"},
+                    "moves": {}, "unchanged": 0,
+                    "before": {}, "after": {}, "estimates": None}
+
+        corpus = self.store.replay_corpus(limit=limit)
+        rows = corpus["rows"]
+
+        # Median observed cost/latency per tier, from the SAME corpus -- used to
+        # price a move into a tier this prompt never visited.
+        # Cost and latency are gathered INDEPENDENTLY, and a missing cost counts
+        # as zero rather than as unknown. The local tier records cost NULL
+        # because it is free, not because nothing was measured -- and requiring
+        # both meant every row that moved OFF local was silently dropped from
+        # the estimate, which is precisely the set of rows the estimate exists
+        # to describe. Latency stays strictly observed: a missing latency really
+        # is unknown.
+        observed: Dict[str, Dict[str, List[float]]] = {}
+        for r in rows:
+            t = observed.setdefault(r["chosen_tier"], {"cost": [], "latency": []})
+            t["cost"].append(r["cost"] if r["cost"] is not None else 0.0)
+            if r["latency_ms"] is not None:
+                t["latency"].append(r["latency_ms"])
+
+        moves: Dict[str, int] = {}
+        before: Dict[str, int] = {}
+        after: Dict[str, int] = {}
+        unchanged = 0
+        cost_before = cost_after = 0.0
+        lat_before = lat_after = 0.0
+        priced = timed = 0
+
+        for r in rows:
+            feats = _features_from_stored(r["features"])
+            gate = capabilities.gate(candidate.models, feats)
+            if not gate.candidates:
+                # The candidate config cannot serve this request at all. That is
+                # a real, reportable outcome -- not a silent skip.
+                moves[f"{r['chosen_tier']} -> (no eligible model)"] = \
+                    moves.get(f"{r['chosen_tier']} -> (no eligible model)", 0) + 1
+                before[r["chosen_tier"]] = before.get(r["chosen_tier"], 0) + 1
+                continue
+            result = decide(candidate, gate.candidates, r["score"], Overrides(),
+                            rejected=gate.rejected)
+            old_tier, new_tier = r["chosen_tier"], result.tier
+            before[old_tier] = before.get(old_tier, 0) + 1
+            after[new_tier] = after.get(new_tier, 0) + 1
+            if old_tier == new_tier:
+                unchanged += 1
+            else:
+                key = f"{old_tier} -> {new_tier}"
+                moves[key] = moves.get(key, 0) + 1
+
+            oc, nc = _median(observed, old_tier, "cost"), _median(observed, new_tier, "cost")
+            if oc is not None and nc is not None:
+                cost_before += oc; cost_after += nc
+                priced += 1
+            ol, nl = _median(observed, old_tier, "latency"), _median(observed, new_tier, "latency")
+            if ol is not None and nl is not None:
+                lat_before += ol; lat_after += nl
+                timed += 1
+
+        estimates = None
+        if priced or timed:
+            estimates = {
+                "basis": "median observed per tier, from this corpus; an average "
+                         "standing in for a specific prompt",
+            }
+            if priced:
+                estimates["priced_rows"] = priced
+                estimates["cost_delta"] = round(cost_after - cost_before, 6)
+            if timed:
+                estimates["timed_rows"] = timed
+                estimates["latency_delta_ms_per_request"] = round(
+                    (lat_after - lat_before) / timed, 1)
+
+        return {
+            "coverage": {
+                "replayed": len(rows),
+                "eligible": corpus["eligible"],
+                "total": corpus["total"],
+                "excluded_override": corpus["excluded_override"],
+                "excluded_no_receipt": corpus["excluded_no_receipt"],
+            },
+            "moves": moves,
+            "unchanged": unchanged,
+            "before": before,
+            "after": after,
+            "estimates": estimates,
+        }
 
     # ---- decision ---------------------------------------------------------
 
@@ -410,6 +533,35 @@ class RouterCore:
 
 
 # ---- helpers --------------------------------------------------------------
+
+def _median(observed, tier, field):
+    """Median of one observed field in a tier, or None if nothing was recorded."""
+    t = observed.get(tier)
+    if not t or not t[field]:
+        return None
+    return statistics.median(t[field])
+
+
+def _features_from_stored(d: Dict[str, Any]) -> "features_mod.RequestFeatures":
+    """Rebuild just enough of RequestFeatures for the capability gate.
+
+    The gate reads four fields: has_images, needs_tools, needs_json and
+    estimated_tokens. `text` is not among them, which is fortunate -- a raw
+    prompt is only persisted when log_raw is on, so reconstructing it is not
+    always possible and is never necessary here.
+    """
+    return features_mod.RequestFeatures(
+        text="",
+        estimated_tokens=int(d.get("estimated_tokens") or 0),
+        has_images=bool(d.get("has_images")),
+        needs_tools=bool(d.get("needs_tools")),
+        needs_json=bool(d.get("needs_json")),
+        num_turns=int(d.get("num_turns") or 0),
+        code_ratio=float(d.get("code_ratio") or 0.0),
+        has_cjk=bool(d.get("has_cjk")),
+        raw_chars=int(d.get("raw_chars") or 0),
+    )
+
 
 def _features_dict(feats) -> Dict[str, Any]:
     return {

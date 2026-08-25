@@ -306,6 +306,71 @@ class TrainingStore:
         keys = ("prompt", "response", "label", "tier", "model", "source", "sensitive")
         return [dict(zip(keys, r)) for r in rows]
 
+    # ---- replay corpus ----------------------------------------------------
+
+    # A decision is replayable only if it actually consulted a threshold. These
+    # markers appear in the persisted `reason` when it did not:
+    #
+    #   force_tier / cheap_only / local_only   caller pinned the tier
+    #   pinned                                 the un-bypassable sensitive pin
+    #
+    # Replaying such a row against new thresholds is meaningless -- it never
+    # asked a threshold anything. And rows with NO reason at all predate the
+    # decision receipt (commit bd7f5a5, 2026-07-11), so we cannot tell either
+    # way; they are excluded rather than assumed innocent.
+    _OVERRIDE_MARKERS = ("force_tier", "cheap_only", "local_only", "pinned")
+
+    def replay_corpus(self, limit: int = 1000) -> Dict[str, Any]:
+        """Rows a routing replay can honestly use, plus what was left out.
+
+        The exclusion counts are returned alongside the rows, not left for the
+        caller to guess. A preview that says "0 requests would change" without
+        saying how many it looked at is indistinguishable from "this change is
+        safe", and that is the failure this whole design is built to avoid.
+
+        No embeddings are read. The stored `score` is already the classifier's
+        output for that prompt, and the stored `features` carry everything the
+        capability gate needs -- so a config replay costs two small columns per
+        row, not a BLOB.
+        """
+        not_override = " AND ".join(
+            f"reason NOT LIKE '%{m}%'" for m in self._OVERRIDE_MARKERS
+        )
+        usable = (f"score IS NOT NULL AND features IS NOT NULL "
+                  f"AND reason IS NOT NULL AND {not_override}")
+        with self._lock:
+            total = self._conn.execute("SELECT COUNT(*) FROM decisions").fetchone()[0]
+            no_receipt = self._conn.execute(
+                "SELECT COUNT(*) FROM decisions WHERE reason IS NULL"
+            ).fetchone()[0]
+            overridden = self._conn.execute(
+                "SELECT COUNT(*) FROM decisions WHERE reason IS NOT NULL "
+                f"AND NOT ({not_override})"
+            ).fetchone()[0]
+            eligible = self._conn.execute(
+                f"SELECT COUNT(*) FROM decisions WHERE {usable}"
+            ).fetchone()[0]
+            # Newest first: replaying the OLDEST rows would describe how a change
+            # affects traffic no longer being sent.
+            rows = self._conn.execute(
+                "SELECT decision_id, score, features, chosen_tier, chosen_model, "
+                f"cost, latency_ms FROM decisions WHERE {usable} "
+                "ORDER BY ts DESC LIMIT ?", (limit,)
+            ).fetchall()
+        return {
+            "rows": [
+                {"decision_id": r[0], "score": r[1],
+                 "features": json.loads(r[2]) if r[2] else {},
+                 "chosen_tier": r[3], "chosen_model": r[4],
+                 "cost": r[5], "latency_ms": r[6]}
+                for r in rows
+            ],
+            "total": total,
+            "eligible": eligible,
+            "excluded_override": overridden,
+            "excluded_no_receipt": no_receipt,
+        }
+
     # ---- config revisions -------------------------------------------------
     #
     #   add_revision(yaml) ──▶ row, active=0        history, not yet in force
