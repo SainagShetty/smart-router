@@ -12,6 +12,7 @@ selectable) so the library stays usable outside one ecosystem.
 from __future__ import annotations
 
 import os
+import re
 from typing import Dict, List, Literal, Optional
 
 import yaml
@@ -147,6 +148,13 @@ class RouterConfig(BaseModel):
     policy: PolicyConfig = Field(default_factory=PolicyConfig)
     logging: LoggingConfig = Field(default_factory=LoggingConfig)
 
+    # Set only in a RENDERED config, by render_revision(). A config being
+    # composed or stored has no revision id yet -- the id exists once the row
+    # does. Its presence is what lets a running process name what it is serving
+    # without consulting the database, which is what keeps the database off the
+    # boot path entirely.
+    revision: Optional[int] = None
+
     # ---- validation -------------------------------------------------------
 
     @model_validator(mode="after")
@@ -201,3 +209,56 @@ class RouterConfig(BaseModel):
     def from_yaml(cls, path: str) -> "RouterConfig":
         with open(path, "r", encoding="utf-8") as fh:
             return cls.from_dict(yaml.safe_load(fh))
+
+
+def render_revision(yaml_text: str, revision_id: int) -> str:
+    """Stamp a revision id into a config, ready to be written to disk.
+
+    Textual on purpose. The obvious implementation -- load with ruamel, set the
+    key, dump -- was written first and measured against the real
+    examples/router.yaml: it preserved all 21 comment lines and parsed
+    identically, but rewrote 10 lines because ruamel does not preserve spacing
+    inside flow mappings (`{ name: local }` became `{name: local}`). Harmless,
+    and still a diff nobody asked for on every save.
+
+    The stamp is a single top-level key and YAML does not care where it sits, so
+    appending it leaves every other byte exactly as the author wrote it. Any
+    existing top-level `revision:` line is dropped first so re-stamping replaces
+    rather than duplicates; the column-0 anchor means an indented key of the
+    same name inside some nested mapping is left alone.
+
+    It is a real validated key rather than a comment, which is what lets a
+    running process name the revision it is serving by reading the file it was
+    already going to read -- and so what keeps the database off the boot path.
+    """
+    kept = [ln for ln in yaml_text.splitlines()
+            if not re.match(r"^revision:\s", ln)]
+    body = "\n".join(kept).rstrip("\n")
+    return f"{body}\n\nrevision: {revision_id}\n"
+
+
+def write_rendered(path: str, text: str) -> None:
+    """Write a rendered config atomically.
+
+    Same file, one syscall to swap it: a partial write would leave the router
+    unable to start on the next boot, and a boot failure on the fleet's gateway
+    takes ten services with it. Temp file in the same directory so os.replace
+    stays on one filesystem, then fsync so the rename cannot be reordered ahead
+    of the contents.
+    """
+    import os
+    import tempfile
+
+    target = os.path.abspath(path)
+    os.makedirs(os.path.dirname(target), exist_ok=True)
+    fd, tmp = tempfile.mkstemp(dir=os.path.dirname(target), suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            fh.write(text)
+            fh.flush()
+            os.fsync(fh.fileno())
+        os.replace(tmp, target)
+    except BaseException:
+        if os.path.exists(tmp):
+            os.unlink(tmp)
+        raise
