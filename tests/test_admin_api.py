@@ -267,3 +267,57 @@ def test_revert_restores_an_earlier_revision(env):
 def test_revert_to_unknown_revision_is_404(env):
     client, _, _ = env
     assert client.post("/admin/api/revert/999", headers=auth()).status_code == 404
+
+
+# --------------------------------------------------------------------------
+# model-as-tier
+# --------------------------------------------------------------------------
+
+def test_model_naming_a_tier_pins_that_tier(env):
+    """A client whose UI has a model dropdown can use it to choose a tier."""
+    client, _, _ = env
+    r = client.post("/route", json={"messages": [{"role": "user", "content": "hi"}],
+                                    "model": "frontier"})
+    assert r.status_code == 200
+    assert r.json()["tier"] == "frontier"
+
+
+def test_model_auto_still_lets_the_router_decide(env):
+    client, _, _ = env
+    r = client.post("/route", json={"messages": [{"role": "user", "content": "hi"}],
+                                    "model": "auto"})
+    assert r.json()["tier"] == "local", "an easy prompt should route local"
+
+
+def test_unknown_model_value_is_ignored_not_rejected(env):
+    """Nine consumers send `model` values that are not tier names. They must
+    keep working exactly as before -- this field was documented as ignored."""
+    client, _, _ = env
+    r = client.post("/route", json={"messages": [{"role": "user", "content": "hi"}],
+                                    "model": "gpt-4o-mini"})
+    assert r.status_code == 200
+    assert r.json()["tier"] == "local"
+
+
+def test_explicit_force_tier_beats_the_model_field(env):
+    client, _, _ = env
+    r = client.post("/route", json={"messages": [{"role": "user", "content": "hi"}],
+                                    "model": "local", "force_tier": "frontier"})
+    assert r.json()["tier"] == "frontier"
+
+
+def test_recent_decisions_reports_what_actually_answered(env):
+    client, _, _ = env
+    client.post("/route", json={"messages": [{"role": "user", "content": "hi"}],
+                                "model": "frontier", "source": "librechat"})
+    rows = client.get("/admin/api/decisions?source=librechat",
+                      headers=auth()).json()["decisions"]
+    assert rows, "the decision a client labelled 'auto' must be visible here"
+    assert rows[0]["tier"] == "frontier"
+    assert rows[0]["model"]
+    assert rows[0]["forced"] is True, "pinned must be distinguishable from chosen"
+
+
+def test_decisions_endpoint_requires_the_admin_token(env):
+    client, _, _ = env
+    assert client.get("/admin/api/decisions").status_code == 401

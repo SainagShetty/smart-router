@@ -62,6 +62,10 @@
   td{padding:.5rem .7rem;border-bottom:1px solid var(--line);color:var(--mid)}
   td.id{font-family:var(--mono);color:var(--ink)}
   .live{color:var(--ok);font-family:var(--mono);font-size:.7rem}
+  select{font-family:var(--mono);font-size:.78rem;background:var(--panel);
+         color:var(--ink);border:1px solid var(--line2);padding:.35rem .5rem;border-radius:2px}
+  .pin{font-family:var(--mono);font-size:.62rem;color:var(--dim);
+       border:1px solid var(--line2);padding:0 .3em;border-radius:2px}
   .hidden{display:none}
   #status{font-size:.82rem;font-family:var(--mono)}
   .s-ok{color:var(--ok)} .s-err{color:var(--crit)} .s-busy{color:var(--mid)}
@@ -99,6 +103,19 @@
     <div id="flags"></div>
     <div id="summary"></div>
     <div id="diffwrap" style="margin-top:1rem"></div>
+  </section>
+
+  <section>
+    <h2>Recent decisions</h2>
+    <div class="row" style="margin-bottom:.6rem">
+      <select id="src" aria-label="Filter by source">
+        <option value="">all sources</option>
+        <option value="librechat">librechat</option>
+      </select>
+      <span class="note">What actually answered, when a caller only said “auto”.</span>
+    </div>
+    <table><thead><tr><th>When</th><th>Tier</th><th>Model</th><th>Took</th><th>Source</th></tr></thead>
+      <tbody id="decisions"></tbody></table>
   </section>
 
   <section>
@@ -180,8 +197,10 @@ ${c.excluded_no_receipt||0} excluded: logged before decisions recorded why they 
 async function refresh(){
   // ONLY /admin/api/* -- the Caddy front 404s everything else, so a page served
   // there cannot reach /health or /stats. Calling them rendered a blank page.
-  const [cfg, hist] = await Promise.all([
-    api("/admin/api/config"), api("/admin/api/revisions")
+  const src = $("src").value;
+  const [cfg, hist, dec] = await Promise.all([
+    api("/admin/api/config"), api("/admin/api/revisions"),
+    api("/admin/api/decisions?limit=25" + (src ? "&source=" + encodeURIComponent(src) : ""))
   ]);
   const stats = cfg.stats || {};
   $("running").textContent = cfg.running_revision ?? "none";
@@ -191,6 +210,17 @@ async function refresh(){
   tierCells(stats.by_tier, stats.total || 0);
   baseYaml = cfg.yaml || "";
   $("yaml").value = baseYaml;
+  $("decisions").innerHTML = (dec.decisions||[]).map(d=>{
+    const t = new Date(d.ts*1000).toLocaleTimeString();
+    const took = d.latency_ms ? (d.latency_ms/1000).toFixed(1)+"s" : "—";
+    // "forced" vs "auto" is the difference between the router choosing and you
+    // choosing -- without it, a pinned tier looks like a routing decision.
+    const how = d.forced ? '<span class="pin">pinned</span>' : '';
+    return `<tr><td>${t}</td><td>${d.tier||"—"}</td>
+       <td class="id">${(d.model||"—").replace(/[<>]/g,"")} ${how}</td>
+       <td>${took}</td><td>${(d.source||"—").replace(/[<>]/g,"")}</td></tr>`;
+  }).join("") || '<tr><td colspan="5" class="note">no decisions logged</td></tr>';
+
   $("history").innerHTML = (hist.revisions||[]).map(r=>`
     <tr><td class="id">${r.id}</td>
         <td>${new Date(r.created_at*1000).toLocaleString()}</td>
@@ -244,6 +274,8 @@ $("history").onclick = async ev => {
        status(`reverted to ${id}`,"s-ok"); await refresh(); }
   catch(e){ status(e.message,"s-err"); }
 };
+
+$("src").addEventListener("change", ()=>refresh().catch(e=>status(e.message,"s-err")));
 
 $("yaml").addEventListener("input", ()=>{
   if($("yaml").value !== previewed){ $("apply").disabled = true; }

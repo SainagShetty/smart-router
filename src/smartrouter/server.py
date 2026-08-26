@@ -62,7 +62,12 @@ class ChatRequest(BaseModel):
     model_config = {"extra": "allow"}
 
     messages: List[Dict[str, Any]]
-    model: Optional[str] = None  # accepted & ignored; the router decides
+    # Historically accepted and ignored. Now: an exact TIER NAME pins that tier,
+    # anything else -- including "auto" and any real model id -- is ignored as
+    # before. That keeps the nine existing consumers (all of which send "auto")
+    # working untouched, while letting a client whose UI has a model dropdown
+    # use it to choose a tier and label the result honestly.
+    model: Optional[str] = None
     stream: bool = False
     tools: Optional[List[Any]] = None
     response_format: Optional[Any] = None
@@ -82,6 +87,10 @@ class ChatRequest(BaseModel):
 
 class RouteRequest(BaseModel):
     messages: List[Dict[str, Any]]
+    # Present so /route produces the SAME decision /v1/chat/completions would.
+    # /route exists to preview routing without paying for it; a field one
+    # honours and the other ignores makes it lie.
+    model: Optional[str] = None
     tools: Optional[List[Any]] = None
     response_format: Optional[Any] = None
     force_tier: Optional[str] = None
@@ -164,11 +173,24 @@ def create_app(
         if authorization != expected:
             raise HTTPException(status_code=401, detail="invalid or missing bearer token")
 
+    def _tier_from_model(req) -> Optional[str]:
+        """A `model` that names a tier means "pin this tier".
+
+        Exact match only, and only against tiers this config actually declares.
+        A model id, "auto", or anything unrecognised falls through to None and
+        the router decides -- which is what every existing consumer relies on.
+        An explicit force_tier in the body always wins over this.
+        """
+        name = (getattr(req, "model", None) or "").strip()
+        if not name or name == "auto":
+            return None
+        return name if name in core.config.tier_order() else None
+
     def _overrides(req) -> Dict[str, Any]:
         return {
             "tools": req.tools,
             "response_format": req.response_format,
-            "force_tier": req.force_tier,
+            "force_tier": req.force_tier or _tier_from_model(req),
             "cheap_only": req.cheap_only,
             "local_only": req.local_only,
             "cascade": req.cascade,
@@ -342,6 +364,12 @@ def create_app(
             "config": core.config.model_dump(mode="json"),
             "stats": stats,
         }
+
+    @app.get("/admin/api/decisions", dependencies=ADMIN)
+    def admin_decisions(limit: int = 25, source: Optional[str] = None):
+        if not core.store:
+            return {"decisions": [], "note": "logging is disabled"}
+        return {"decisions": core.store.recent_decisions(limit=limit, source=source)}
 
     @app.get("/admin/api/revisions", dependencies=ADMIN)
     def admin_revisions(limit: int = 50):

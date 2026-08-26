@@ -371,6 +371,31 @@ class TrainingStore:
             "excluded_no_receipt": no_receipt,
         }
 
+    def recent_decisions(self, limit: int = 25,
+                         source: Optional[str] = None) -> List[Dict[str, Any]]:
+        """The last N routing decisions: what was asked for, what answered.
+
+        Exists because a client that sends `model: "auto"` labels its own
+        messages "auto" and has no way to show which model actually ran. The
+        router has always known; this is the read.
+        """
+        sql = ("SELECT ts, chosen_tier, chosen_model, latency_ms, cost, source, "
+               "reason FROM decisions")
+        args: List[Any] = []
+        if source:
+            sql += " WHERE source = ?"
+            args.append(source)
+        sql += " ORDER BY ts DESC LIMIT ?"
+        args.append(limit)
+        with self._lock:
+            rows = self._conn.execute(sql, args).fetchall()
+        return [{"ts": r[0], "tier": r[1], "model": r[2], "latency_ms": r[3],
+                 "cost": r[4], "source": r[5],
+                 # The receipt says whether a tier was chosen or forced -- the
+                 # difference between "the router picked this" and "you did".
+                 "forced": bool(r[6] and ("force_tier" in r[6] or "pinned" in r[6]))}
+                for r in rows]
+
     # ---- config revisions -------------------------------------------------
     #
     #   add_revision(yaml) ──▶ row, active=0        history, not yet in force
