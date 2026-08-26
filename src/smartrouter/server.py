@@ -321,12 +321,26 @@ def create_app(
 
     @app.get("/admin/api/config", dependencies=ADMIN)
     def admin_get_config():
+        """Everything the UI needs to render, in one call.
+
+        Deliberately self-contained. The Caddy front publishes /admin* and 404s
+        everything else, so /v1 and the provider keys behind it can never leak
+        onto that hostname -- which also means a page served there CANNOT reach
+        /health or /stats. An earlier version of the UI called both and rendered
+        nothing at all in production, because one 404 rejected the Promise.all.
+        Anything /admin needs lives under /admin.
+        """
         active = core.store.active_revision() if core.store else None
+        stats = None
+        if core.store:
+            by_tier = core.store.tier_counts()
+            stats = {"by_tier": by_tier, "total": sum(by_tier.values())}
         return {
             "running_revision": core.config.revision,
             "active_revision": active["id"] if active else None,
             "yaml": active["yaml"] if active else None,
             "config": core.config.model_dump(mode="json"),
+            "stats": stats,
         }
 
     @app.get("/admin/api/revisions", dependencies=ADMIN)

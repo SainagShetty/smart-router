@@ -178,16 +178,17 @@ ${c.excluded_no_receipt||0} excluded: logged before decisions recorded why they 
 }
 
 async function refresh(){
-  const [cfg, health, stats, hist] = await Promise.all([
-    api("/admin/api/config"), api("/health"),
-    api("/stats").catch(()=>({})), api("/admin/api/revisions")
+  // ONLY /admin/api/* -- the Caddy front 404s everything else, so a page served
+  // there cannot reach /health or /stats. Calling them rendered a blank page.
+  const [cfg, hist] = await Promise.all([
+    api("/admin/api/config"), api("/admin/api/revisions")
   ]);
-  $("running").textContent = health.revision ?? "none";
-  const drift = cfg.active_revision != null && cfg.active_revision !== health.revision;
+  const stats = cfg.stats || {};
+  $("running").textContent = cfg.running_revision ?? "none";
+  const drift = cfg.active_revision != null && cfg.active_revision !== cfg.running_revision;
   $("mismatch").innerHTML = drift
     ? `<span style="color:var(--crit)">· database says ${cfg.active_revision} — restart to reconcile</span>` : "";
-  const total = Object.values(stats.by_tier||{}).reduce((a,b)=>a+b,0);
-  tierCells(stats.by_tier, total);
+  tierCells(stats.by_tier, stats.total || 0);
   baseYaml = cfg.yaml || "";
   $("yaml").value = baseYaml;
   $("history").innerHTML = (hist.revisions||[]).map(r=>`
