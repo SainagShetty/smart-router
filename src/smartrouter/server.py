@@ -33,7 +33,8 @@ from __future__ import annotations
 
 import json
 import os
-from typing import Any, Dict, List, Optional
+import time
+from typing import Any, Dict, Iterable, Iterator, List, Optional, Union
 
 from pydantic import BaseModel, Field
 
@@ -53,6 +54,84 @@ try:
     from starlette.requests import Request
 except ImportError:  # pragma: no cover - optional extra
     Request = Any  # type: ignore[misc,assignment]
+
+
+
+# --------------------------------------------------------------------------
+# stream smoothing
+# --------------------------------------------------------------------------
+
+SMOOTH_DEFAULT_RATE = 300.0   # characters per second
+SMOOTH_PIECE = 3              # characters per emitted fragment
+
+
+def _delta_content(chunk: Dict[str, Any]) -> str:
+    """The assistant text carried by an OpenAI-shaped stream chunk, or ''."""
+    try:
+        return chunk["choices"][0]["delta"].get("content") or ""
+    except (KeyError, IndexError, TypeError, AttributeError):
+        return ""
+
+
+def _rechunk(chunk: Dict[str, Any], text: str) -> Dict[str, Any]:
+    """`chunk` with its delta content replaced. Copies only the four nodes on
+    the path to `content`; the rest is shared, which is safe because nothing
+    downstream mutates a chunk it has already yielded."""
+    choice = dict(chunk["choices"][0])
+    choice["delta"] = {**choice["delta"], "content": text}
+    return {**chunk, "choices": [choice] + list(chunk["choices"][1:])}
+
+
+def _smooth(
+    chunks: Iterable[Dict[str, Any]],
+    rate: float = SMOOTH_DEFAULT_RATE,
+    piece: int = SMOOTH_PIECE,
+) -> Iterator[Dict[str, Any]]:
+    """Re-time a stream so text arrives at a readable pace.
+
+    WHY THIS EXISTS. Providers batch tokens before flushing. Measured against
+    the frontier tier: ~101 characters per SSE event, one event every ~94ms --
+    so a whole sentence materialises at once and the reader gets a series of
+    dumps rather than a stream. Splitting is not enough on its own: fragments
+    written back-to-back leave in one TCP segment and land together. The pacing
+    is the point.
+
+    Fragments are released against a schedule of `rate` characters per second,
+    anchored at the first fragment. Because the schedule is absolute rather
+    than per-chunk, a slow model is never slowed further -- if generation is
+    already behind the schedule the sleep is skipped and output is passed
+    through as fast as it arrives. It only ever spreads bursts.
+
+    Chunks carrying no text -- role headers, tool_calls, finish_reason -- pass
+    through untouched and immediately, so tool calling and stop reasons are
+    unaffected.
+
+    Cost: a response longer than rate x its natural duration takes longer to
+    finish rendering. That is the requested behaviour, and `rate` tunes it.
+    """
+    if rate <= 0:
+        yield from chunks
+        return
+
+    start: Optional[float] = None
+    emitted = 0
+
+    for chunk in chunks:
+        text = _delta_content(chunk)
+        if not text:
+            yield chunk
+            continue
+        for i in range(0, len(text), piece):
+            fragment = text[i:i + piece]
+            if start is None:
+                start = time.monotonic()
+            else:
+                due = start + emitted / rate
+                ahead = due - time.monotonic()
+                if ahead > 0:
+                    time.sleep(ahead)
+            emitted += len(fragment)
+            yield _rechunk(chunk, fragment)
 
 
 class ChatRequest(BaseModel):
@@ -81,6 +160,14 @@ class ChatRequest(BaseModel):
     log_raw: Optional[bool] = None
     source: Optional[str] = None
     sensitive: bool = False
+    # Presentation, not routing. Declared for the same reason as the logging
+    # controls above: an undeclared field lands in model_extra and would be
+    # forwarded to the provider, which rejects unknown params.
+    #
+    # bool BEFORE float in the union is load-bearing: as a bare Optional[float]
+    # pydantic coerces `true` to 1.0, which is a rate of one character per
+    # second rather than "on".
+    smooth_stream: Optional[Union[bool, float]] = None
     # explicit passthrough params, for clients that prefer to nest them
     params: Dict[str, Any] = Field(default_factory=dict)
 
@@ -239,6 +326,12 @@ def create_app(
         try:
             if req.stream:
                 chunks, decision = core.stream(req.messages, **ov, **passthrough)
+
+                if req.smooth_stream:
+                    rate = (SMOOTH_DEFAULT_RATE
+                            if isinstance(req.smooth_stream, bool)
+                            else float(req.smooth_stream))
+                    chunks = _smooth(chunks, rate=rate)
 
                 def event_stream():
                     for chunk in chunks:
