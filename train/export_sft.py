@@ -5,6 +5,10 @@ This is the corpus for fine-tuning/distilling your own LLM: the routed model's
 answer is the training target, and labels act as quality filters (label=1 rows
 are known-bad answers and are dropped unless --keep-bad).
 
+Monitor and load-test traffic is dropped too (--keep-synthetic to retain it).
+Those sources repeat one prompt on a timer, so they carry no signal and, left
+in, they outnumber the real corpus.
+
     python train/export_sft.py --store smartrouter.db --out datasets/sft_v1
     python train/export_sft.py --exclude-sensitive          # drop tagged rows
     python train/export_sft.py --tiers cheap frontier       # distill from cloud only
@@ -38,14 +42,23 @@ def main():
                          "from cloud-model answers)")
     ap.add_argument("--keep-bad", action="store_true",
                     help="keep label=1 rows (known under-served answers)")
+    ap.add_argument("--keep-synthetic", action="store_true",
+                    help="keep monitor/load-test rows (see _SYNTHETIC_SOURCES)")
     args = ap.parse_args()
 
     store = TrainingStore(args.store)
-    rows = store.sft_rows(include_sensitive=not args.exclude_sensitive)
+    # Ask for the synthetic rows even when dropping them, so the count below is
+    # exact. A corpus that silently shrinks by a third is the failure here.
+    rows = store.sft_rows(include_sensitive=not args.exclude_sensitive,
+                          include_synthetic=True)
+    synthetic = set(TrainingStore._SYNTHETIC_SOURCES)
     store.close()
 
-    kept, dropped_bad, dropped_tier = [], 0, 0
+    kept, dropped_bad, dropped_tier, dropped_synth = [], 0, 0, 0
     for r in rows:
+        if not args.keep_synthetic and r["source"] in synthetic:
+            dropped_synth += 1
+            continue
         if not args.keep_bad and r["label"] == 1:
             dropped_bad += 1
             continue
@@ -68,7 +81,8 @@ def main():
             }, ensure_ascii=False) + "\n")
 
     print(f"wrote {args.out}.jsonl ({len(kept)} pairs; "
-          f"dropped {dropped_bad} bad-label, {dropped_tier} off-tier)")
+          f"dropped {dropped_synth} synthetic, {dropped_bad} bad-label, "
+          f"{dropped_tier} off-tier)")
 
 
 if __name__ == "__main__":

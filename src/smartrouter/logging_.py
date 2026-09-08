@@ -290,19 +290,41 @@ class TrainingStore:
             ).fetchall()
         return [(p, int(l)) for p, l in rows]
 
-    def sft_rows(self, include_sensitive: bool = True) -> List[Dict[str, Any]]:
+    # Traffic no human ever sent: monitors and load harnesses. A health check
+    # firing the same sentence every 15 minutes is not 1,300 training examples,
+    # it is one sentence with a multiplier -- and left in, it is 39% of this
+    # store's SFT corpus, all of it "Reply with the single word: ok".
+    #
+    # Excluded by default, unlike `include_sensitive`. Sensitive traffic is real
+    # traffic you may not want to train on; synthetic traffic is never a corpus,
+    # so the safe default is the opposite one.
+    _SYNTHETIC_SOURCES = ("chat-healthcheck", "loadtest",
+                          "loadtest-router-probe", "router-ramp")
+
+    def sft_rows(self, include_sensitive: bool = True,
+                 include_synthetic: bool = False) -> List[Dict[str, Any]]:
         """(prompt, response) pairs where both raw texts were retained — the
         corpus for fine-tuning/distilling an LLM. Filter sensitive traffic out
-        with ``include_sensitive=False``."""
+        with ``include_sensitive=False``; pass ``include_synthetic=True`` to get
+        monitor and load-test rows back (see ``_SYNTHETIC_SOURCES``)."""
         q = (
             "SELECT prompt_raw, response_raw, label, chosen_tier, chosen_model, "
             "source, sensitive FROM decisions "
             "WHERE prompt_raw IS NOT NULL AND response_raw IS NOT NULL"
         )
+        params: List[Any] = []
         if not include_sensitive:
             q += " AND sensitive = 0"
+        if not include_synthetic:
+            marks = ",".join("?" * len(self._SYNTHETIC_SOURCES))
+            # The NULL guard is load-bearing: `NULL NOT IN (...)` is NULL, not
+            # true, so without it every row predating source tagging (187 here)
+            # would vanish from the corpus silently. Unattributed is not
+            # synthetic.
+            q += f" AND (source IS NULL OR source NOT IN ({marks}))"
+            params.extend(self._SYNTHETIC_SOURCES)
         with self._lock:
-            rows = self._conn.execute(q).fetchall()
+            rows = self._conn.execute(q, params).fetchall()
         keys = ("prompt", "response", "label", "tier", "model", "source", "sensitive")
         return [dict(zip(keys, r)) for r in rows]
 

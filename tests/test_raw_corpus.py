@@ -124,6 +124,39 @@ def test_sft_rows_and_sensitive_filter(tmp_db):
     store.close()
 
 
+def test_sft_rows_drops_synthetic_sources_by_default(tmp_db):
+    core = _core(tmp_db, log_raw=True)
+    core.complete([{"role": "user", "content": "real q"}], source="resume-bot")
+    core.complete([{"role": "user", "content": "ok probe"}],
+                  source="chat-healthcheck")
+    core.complete([{"role": "user", "content": "ramp q"}], source="router-ramp")
+    core.complete([{"role": "user", "content": "untagged q"}])  # source IS NULL
+    core.close()
+
+    store = TrainingStore(tmp_db)
+    # Untagged rows predate source tagging. They are unattributed, not
+    # synthetic, and a naive `source NOT IN (...)` would drop them: in SQL
+    # `NULL NOT IN (...)` is NULL, not true.
+    assert sorted(r["prompt"] for r in store.sft_rows()) == ["real q", "untagged q"]
+    assert len(store.sft_rows(include_synthetic=True)) == 4
+    store.close()
+
+
+def test_sft_rows_synthetic_and_sensitive_filters_compose(tmp_db):
+    core = _core(tmp_db, log_raw=True)
+    core.complete([{"role": "user", "content": "real q"}], source="resume-bot")
+    core.complete([{"role": "user", "content": "private q"}],
+                  source="finance-auditor", sensitive=True)
+    core.complete([{"role": "user", "content": "ok probe"}],
+                  source="chat-healthcheck")
+    core.close()
+
+    store = TrainingStore(tmp_db)
+    rows = store.sft_rows(include_sensitive=False)
+    assert [r["prompt"] for r in rows] == ["real q"]
+    store.close()
+
+
 # ---- server layer -------------------------------------------------------------
 
 def test_server_logging_fields_logged_not_forwarded(tmp_db):
