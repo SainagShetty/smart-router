@@ -15,13 +15,13 @@ tiers:
   - { name: frontier, min_score: 0.75 }
 
 models:
-  - id: "gemma3n:e4b"
+  - id: "dolphin3:8b"
     provider: ollama
     tier: local
     # 4096, not the model's architectural 32768: Ollama allocates num_ctx, and it
     # defaults to 4096 regardless of what the model supports. Declaring more than
     # Ollama serves means the gate admits prompts that then get silently
-    # truncated — gemma would answer on a clipped conversation with nothing
+    # truncated — the model would answer on a clipped conversation with nothing
     # surfacing the loss. (Measured 2026-07-31: nothing had actually overflowed
     # yet, so this was latent rather than live.)
     #
